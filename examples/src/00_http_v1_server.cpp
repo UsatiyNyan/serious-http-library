@@ -34,7 +34,7 @@ void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount) {
             std::vector<std::byte> request_buffer;
             {
                 while (true) {
-                    const auto read_result = co_await (conn.read(read_buffer) | exec::on(executor));
+                    const auto read_result = co_await (conn.read(read_buffer) | exec::continue_on(executor));
                     if (!read_result.has_value() || read_result.value() == 0) {
                         break;
                     }
@@ -53,7 +53,7 @@ void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount) {
             {
                 std::span<const std::byte> write_buffer{ response_buffer };
                 while (!write_buffer.empty()) {
-                    const auto write_result = co_await (conn.write(write_buffer) | exec::on(executor));
+                    const auto write_result = co_await (conn.write(write_buffer) | exec::continue_on(executor));
                     if (!write_result.has_value() || write_result.value() == 0) {
                         break;
                     }
