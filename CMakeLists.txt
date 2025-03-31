@@ -15,7 +15,7 @@ sl_project_prologue(
         C_STANDARD 17)
 
 project(
-        serious-template-library
+        serious-http-library
         VERSION 0.0.0
         DESCRIPTION "TODO"
         HOMEPAGE_URL "TODO"
