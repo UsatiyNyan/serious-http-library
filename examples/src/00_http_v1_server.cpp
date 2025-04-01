@@ -15,7 +15,7 @@
 
 namespace sl {
 
-http::v1::response_type handle(meta::maybe<http::v1::request_type> http_request) { PANIC("TODO"); }
+http::v1::response_type handle(meta::maybe<http::v1::request_type> maybe_http_request) { PANIC("TODO"); }
 
 void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount) {
     auto epoll = *ASSERT_VAL(io::epoll::create());
@@ -43,10 +43,9 @@ void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount) {
                 }
             }
 
-            const meta::maybe<http::v1::request_type> maybe_http_request =
-                http::v1::parse(std::span<const std::byte>{ request_buffer });
+            const auto maybe_http_request = http::v1::deserialize_request(std::span<const std::byte>{ request_buffer });
 
-            const http::v1::response_type http_response = handle(maybe_http_request);
+            const auto http_response = handle(maybe_http_request);
 
             const std::vector<std::byte> response_buffer = http::v1::serialize(http_response);
 
