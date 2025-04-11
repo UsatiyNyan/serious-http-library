@@ -22,6 +22,9 @@ project(
         LANGUAGES C CXX)
 
 add_library(${PROJECT_NAME} STATIC
+    src/v1/types/fields.cpp
+    src/v1/types/request_start.cpp
+    src/v1/types/response_start.cpp
     src/v1/deserialize.cpp
     )
 add_library(sl::http ALIAS ${PROJECT_NAME})
