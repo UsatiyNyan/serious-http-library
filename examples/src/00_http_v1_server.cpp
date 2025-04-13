@@ -3,6 +3,7 @@
 //
 
 #include "sl/http.hpp"
+#include "sl/http/v1/deserialize.hpp"
 
 #include <sl/exec.hpp>
 #include <sl/exec/algo/sched/inline.hpp>
@@ -15,7 +16,10 @@
 
 namespace sl {
 
-http::v1::response_type handle(meta::maybe<http::v1::request_type> maybe_http_request) { PANIC("TODO"); }
+exec::async<http::v1::response_message>
+    handle(meta::result<http::v1::request_message, http::v1::status_type> http_request_result) {
+    PANIC("TODO");
+}
 
 void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount) {
     auto epoll = *ASSERT_VAL(io::epoll::create());
@@ -29,31 +33,30 @@ void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount) {
         using exec::operator co_await;
         using exec::operator|;
 
-        std::array<std::byte, 1024> read_buffer{};
-        while (true) {
-            std::vector<std::byte> request_buffer;
-            {
-                while (true) {
-                    const auto read_result = co_await (conn.read(read_buffer) | exec::continue_on(executor));
-                    if (!read_result.has_value() || read_result.value() == 0) {
-                        break;
-                    }
-                    const std::span request_chunk{ read_buffer.data(), read_result.value() };
-                    request_buffer.insert(request_buffer.end(), request_chunk.begin(), request_chunk.end());
+        // explicitly not default-initialized, safety provided via span
+        std::array<std::byte, 1024> read_buffer;
+        http::v1::request_deserializer deserializer;
+        while (deserializer.keep_alive()) {
+            while (!deserializer.has_next()) {
+                const auto read_result = co_await (conn.read(read_buffer) | exec::continue_on(executor));
+                if (read_result.value_or(0) == 0) {
+                    deserializer.close();
+                    break;
                 }
+                const std::span request_chunk{ read_buffer.data(), read_result.value() };
+                deserializer.read(request_chunk);
             }
 
-            const auto maybe_http_request = http::v1::deserialize_request(std::span<const std::byte>{ request_buffer });
+            while (deserializer.has_next()) {
+                const auto http_response = co_await handle(deserializer.next());
+                // body can be serialized separately, maybe, some optimizations could be applied
+                const std::vector<std::byte> response_buffer = http::v1::serialize(http_response);
 
-            const auto http_response = handle(maybe_http_request);
-
-            const std::vector<std::byte> response_buffer = http::v1::serialize(http_response);
-
-            {
                 std::span<const std::byte> write_buffer{ response_buffer };
                 while (!write_buffer.empty()) {
                     const auto write_result = co_await (conn.write(write_buffer) | exec::continue_on(executor));
-                    if (!write_result.has_value() || write_result.value() == 0) {
+                    if (write_result.value_or(0) == 0) {
+                        deserializer.close();
                         break;
                     }
                     write_buffer = write_buffer.subspan(write_result.value());

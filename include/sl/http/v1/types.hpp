@@ -14,15 +14,34 @@
 
 namespace sl::http::v1 {
 
+using target_type = std::string; // TODO: url
+
+enum class version_type {
+    HTTPv1_0,
+    HTTPv1_1,
+    ENUM_END,
+};
+
+constexpr std::string_view enum_to_str(version_type e) {
+    switch (e) {
+    case version_type::HTTPv1_0:
+        return "HTTP/1.0";
+    case version_type::HTTPv1_1:
+        return "HTTP/1.1";
+    default:
+        return {};
+    }
+}
+
 using body_type = std::span<const std::byte>;
 
-struct request_type {
+struct request_message {
     request_start_type start;
     fields_type fields; // can be empty
     body_type body; // optional
 };
 
-struct response_type {
+struct response_message {
     response_start_type start;
     fields_type fields; // can be empty
     body_type body; // optional
