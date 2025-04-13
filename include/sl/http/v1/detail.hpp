@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include <sl/meta/enum/to_string.hpp>
 #include <sl/meta/monad/maybe.hpp>
+#include <sl/meta/monad/result.hpp>
 
 #include <span>
 #include <string_view>
-#include <tuple>
 
 namespace sl::http::v1::detail {
 
@@ -23,16 +24,33 @@ constexpr std::string_view HTTP = "HTTP";
 
 } // namespace tokens
 
+std::string_view buffer_byte_to_str(std::span<const std::byte> byte_buffer);
+std::span<const std::byte> buffer_str_to_byte(std::string_view str_buffer);
+
 std::string_view strip_prefix(std::string_view str, std::string_view prefix);
 std::string_view strip_suffix(std::string_view str, std::string_view suffix);
 
-meta::maybe<std::tuple<std::string_view, std::string_view>> try_find_with_remainder(
-    std::string_view str_buffer,
-    std::string_view delim,
-    std::size_t max_size = std::string_view::npos
-);
+struct find_ok {
+    std::string_view value;
+    std::size_t offset;
+};
 
-std::string_view buffer_byte_to_str(std::span<const std::byte> byte_buffer);
-std::span<const std::byte> buffer_str_to_byte(std::string_view str_buffer);
+enum class find_err {
+    NOT_FOUND,
+    MAX_SIZE_EXCEEDED,
+};
+
+meta::result<find_ok, find_err>
+    try_find(std::string_view str_buffer, std::string_view delim, std::size_t max_size = std::string_view::npos);
+
+template <typename EnumT>
+consteval std::size_t enum_max_str_length() {
+    std::size_t max_str_length = 0;
+    for (EnumT e{}; e != EnumT::ENUM_END; e = meta::next(e)) {
+        std::string_view e_str = enum_to_str(e);
+        max_str_length = std::max(max_str_length, e_str.size());
+    }
+    return max_str_length;
+}
 
 } // namespace sl::http::v1::detail
