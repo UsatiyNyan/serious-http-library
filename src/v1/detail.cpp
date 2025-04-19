@@ -4,6 +4,8 @@
 
 #include "sl/http/v1/detail.hpp"
 
+#include <libassert/assert.hpp>
+
 #include <bit>
 
 namespace sl::http::v1::detail {
@@ -30,16 +32,55 @@ std::string_view strip_suffix(std::string_view str, std::string_view suffix) {
     return str;
 }
 
-meta::result<find_ok, find_err> try_find(std::string_view str_buffer, std::string_view delim, std::size_t max_size) {
-    const std::size_t it = str_buffer.substr(0, max_size).find(delim);
-    if (it == std::string_view::npos) {
-        const find_err err = max_size > str_buffer.size() ? find_err::NOT_FOUND : find_err::MAX_SIZE_EXCEEDED;
-        return meta::err(err);
+meta::result<find_ok, find_err>
+    try_find_limited(std::string_view str_buffer, std::string_view delim, std::size_t max_size) {
+    // avoiding integer overflows
+    if (DEBUG_ASSERT_VAL(max_size > str_buffer.max_size() - delim.size())) {
+        // TODO: .visited_bytes = 0,
+        return meta::err(find_err::MAX_SIZE_EXCEEDED);
     }
+
+    const std::size_t max_size_w_delim = max_size + delim.size();
+    const std::size_t limited_str_buffer_size = std::min(max_size_w_delim, str_buffer.size());
+    const auto limited_str_buffer = str_buffer.substr(0, limited_str_buffer_size);
+
+    return try_find_unlimited(limited_str_buffer, delim).map_error([&](find_err err) {
+        DEBUG_ASSERT(err == find_err::NOT_FOUND);
+        const bool is_max_size_exceeded = max_size_w_delim <= str_buffer.size();
+        // TODO: .visited_bytes = std::max(limited_str_buffer.size(), delim.size()) - delim.size(),
+        if (is_max_size_exceeded) {
+            return find_err::MAX_SIZE_EXCEEDED;
+        }
+        return err;
+    });
+}
+
+meta::result<find_ok, find_err> try_find_unlimited(std::string_view str_buffer, std::string_view delim) {
+    const std::size_t it = str_buffer.find(delim);
+
+    if (it == std::string_view::npos) {
+        return meta::err(find_err::NOT_FOUND);
+    }
+
     return find_ok{
         .value = str_buffer.substr(0, it),
         .offset = it + delim.size(),
     };
+}
+
+meta::maybe<std::tuple<std::string_view, std::string_view>>
+    try_find_split(std::string_view str_buffer, std::string_view delim) {
+    if (str_buffer.empty()) {
+        return meta::null;
+    }
+
+    const auto result = try_find_unlimited(str_buffer, delim);
+    if (!result.has_value()) {
+        return std::make_tuple(str_buffer, std::string_view{});
+    }
+
+    const auto value = result.value();
+    return std::make_tuple(value.value, str_buffer.substr(value.offset));
 }
 
 } // namespace sl::http::v1::detail

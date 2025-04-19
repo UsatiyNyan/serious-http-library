@@ -35,13 +35,19 @@ struct find_ok {
     std::size_t offset;
 };
 
+// TODO: visited_bytes
 enum class find_err {
     NOT_FOUND,
     MAX_SIZE_EXCEEDED,
 };
 
 meta::result<find_ok, find_err>
-    try_find(std::string_view str_buffer, std::string_view delim, std::size_t max_size = std::string_view::npos);
+    try_find_limited(std::string_view str_buffer, std::string_view delim, std::size_t maybe_max_size);
+
+meta::result<find_ok, find_err> try_find_unlimited(std::string_view str_buffer, std::string_view delim);
+
+meta::maybe<std::tuple<std::string_view, std::string_view>>
+    try_find_split(std::string_view str_buffer, std::string_view delim);
 
 template <typename EnumT>
 consteval std::size_t enum_max_str_length() {

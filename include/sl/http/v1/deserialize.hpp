@@ -66,14 +66,18 @@ struct deserialize_request_state_fields : deserialize_request_state_version {
 
 public:
     fields_type fields;
+    std::size_t fields_byte_size_total = 0;
 };
 
 struct deserialize_request_state_body : deserialize_request_state_fields {
-    explicit deserialize_request_state_body(deserialize_request_state_fields&& prev_state) noexcept
-        : deserialize_request_state_fields{ std::move(prev_state) } {}
+    deserialize_request_state_body(deserialize_request_state_fields&& prev_state, std::size_t content_length) noexcept
+        : deserialize_request_state_fields{ std::move(prev_state) }, content_length{ content_length } {
+        body.reserve(this->content_length);
+    }
 
 public:
-    std::span<const std::byte> body;
+    std::vector<std::byte> body;
+    std::size_t content_length;
 };
 
 struct deserialize_request_state_chunked_body : deserialize_request_state_fields {
@@ -137,6 +141,7 @@ struct deserialize_request_process_result {
 std::tuple<deserialize_request_state, std::size_t, bool> //
     deserialize_request_process_err(deserialize_request_state state);
 std::tuple<deserialize_request_state, std::size_t, bool> deserialize_request_process_complete_err(status_type status);
+deserialize_request_state deserialize_request_process_fields(deserialize_request_state_fields state);
 
 std::tuple<deserialize_request_state, std::size_t, bool>
     deserialize_request_process(deserialize_request_state_empty state, std::span<const std::byte> byte_buffer);

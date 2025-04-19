@@ -19,6 +19,8 @@
 
 #include <libassert/assert.hpp>
 
+#include <charconv>
+
 namespace sl::http::v1 {
 namespace detail {
 
@@ -41,6 +43,7 @@ std::size_t deserialize_request_remainder::merge(std::span<const std::byte> byte
     return offset;
 }
 
+// TODO: visited_bytes
 std::tuple<deserialize_request_state, std::size_t, bool> //
     deserialize_request_process_err(deserialize_request_state state) {
     return std::make_tuple(std::move(state), 0, false);
@@ -56,7 +59,7 @@ std::tuple<deserialize_request_state, std::size_t, bool>
     constexpr std::size_t method_max_length = enum_max_str_length<method_type>();
     const auto str_buffer = buffer_byte_to_str(byte_buffer);
 
-    const auto method_result = try_find(str_buffer, tokens::SP, method_max_length);
+    const auto method_result = try_find_limited(str_buffer, tokens::SP, method_max_length);
     if (!method_result.has_value()) {
         const auto& method_err = method_result.error();
         if (method_err == find_err::MAX_SIZE_EXCEEDED) {
@@ -82,7 +85,7 @@ std::tuple<deserialize_request_state, std::size_t, bool>
     constexpr std::size_t target_max_length = 8000;
     const auto str_buffer = buffer_byte_to_str(byte_buffer);
 
-    const auto target_result = try_find(str_buffer, tokens::SP, target_max_length);
+    const auto target_result = try_find_limited(str_buffer, tokens::SP, target_max_length);
     if (!target_result.has_value()) {
         const auto& target_err = target_result.error();
         if (target_err == find_err::MAX_SIZE_EXCEEDED) {
@@ -109,7 +112,7 @@ std::tuple<deserialize_request_state, std::size_t, bool>
     constexpr std::size_t version_max_length = enum_max_str_length<version_type>();
     const auto str_buffer = buffer_byte_to_str(byte_buffer);
 
-    const auto version_result = try_find(str_buffer, tokens::CRLF, version_max_length);
+    const auto version_result = try_find_limited(str_buffer, tokens::CRLF, version_max_length);
     if (!version_result.has_value()) {
         const auto& version_err = version_result.error();
         if (version_err == find_err::MAX_SIZE_EXCEEDED) {
@@ -135,52 +138,128 @@ std::tuple<deserialize_request_state, std::size_t, bool> deserialize_request_pro
     return std::make_tuple(deserialize_request_state_fields{ std::move(state) }, 0, true);
 }
 
+deserialize_request_state deserialize_request_process_fields(deserialize_request_state_fields state) {
+    const auto find_field = [&](auto k) -> meta::maybe<std::string_view> {
+        auto it = state.fields.find(k); // can avoid string creation
+        if (it == state.fields.end()) {
+            return meta::null;
+        }
+        return std::string_view{ it.value() };
+    };
+
+    const auto maybe_transfer_encodings = find_field("Transfer-Encoding");
+    const auto maybe_content_length_str = find_field("Content-Length");
+
+    const bool is_chunked = maybe_transfer_encodings
+                                .map([](std::string_view transfer_encodings) {
+                                    while (const auto maybe_next = try_find_split(transfer_encodings, ", ")) {
+                                        const auto [transfer_encoding, remainder] = maybe_next.value();
+                                        if (transfer_encoding == "chunked") {
+                                            return true;
+                                        }
+                                        transfer_encodings = remainder;
+                                    }
+                                    return false;
+                                })
+                                .value_or(false);
+
+    if (is_chunked) {
+        if (maybe_content_length_str.has_value()) {
+            // TODO: or is it?
+            return deserialize_request_state_complete{ meta::err(status_type::BAD_REQUEST) };
+        }
+
+        return deserialize_request_state_chunked_body{ std::move(state) };
+    }
+
+    const auto maybe_content_length =
+        maybe_content_length_str.and_then([](std::string_view content_length_str) -> meta::maybe<std::size_t> {
+            std::size_t content_length = 0;
+            const auto conv_result =
+                std::from_chars(content_length_str.begin(), content_length_str.end(), content_length);
+            if (conv_result.ec != std::error_code{} || conv_result.ptr != content_length_str.end()) {
+                return meta::null;
+            }
+            return content_length;
+        });
+
+    if (!maybe_content_length.has_value()) {
+        return deserialize_request_state_complete{ meta::err(status_type::BAD_REQUEST) };
+    }
+    const std::size_t content_length = maybe_content_length.value();
+
+    return deserialize_request_state_body{ std::move(state), content_length };
+}
+
 // *( field-line CRLF ) CRLF
 // field-line   = field-name ":" OWS field-value OWS
 std::tuple<deserialize_request_state, std::size_t, bool>
     deserialize_request_process(deserialize_request_state_fields state, std::span<const std::byte> byte_buffer) {
+    constexpr std::size_t max_fields_size = 80 * 1024; // 80KiB
     const auto str_buffer = buffer_byte_to_str(byte_buffer);
 
-    // std::string_view fields_remainder = start_line_remainder;
-    //
-    // while (true) {
-    //     const auto field_line_result = try_find(fields_remainder, tokens::CRLF);
-    //     if (!field_line_result.has_value()) {
-    //         return meta::null;
-    //     }
-    //     const auto& [field_line, field_line_remainder] = field_line_result.value();
-    //
-    //     fields_remainder = field_line_remainder;
-    //     if (field_line.empty()) { // detected last CRLF
-    //         break;
-    //     }
-    //
-    //     const auto field_kv_result = deserialize_field(field_line);
-    //     if (!field_kv_result.has_value()) {
-    //         return meta::null;
-    //     }
-    //     const auto& [field_key, field_value] = field_kv_result.value();
-    //
-    //     const auto [field_kv_it, field_kv_is_emplaced] = fields.try_emplace(field_key, field_value);
-    //     if (std::ignore = field_kv_it; !field_kv_is_emplaced) {
-    //         return meta::null;
-    //     }
-    // }
-    //
-    // return std::make_pair(fields, fields_remainder);
+    const auto field_line_result =
+        try_find_limited(str_buffer, tokens::CRLF, max_fields_size - state.fields_byte_size_total);
+    if (!field_line_result.has_value()) {
+        const auto& field_line_err = field_line_result.error();
+        if (field_line_err == find_err::MAX_SIZE_EXCEEDED) {
+            return deserialize_request_process_complete_err(status_type::CONTENT_TOO_LARGE);
+        }
+        DEBUG_ASSERT(field_line_err == find_err::NOT_FOUND);
+        return deserialize_request_process_err(std::move(state));
+    }
+    const auto& [field_line, field_line_offset] = field_line_result.value();
 
-    state.buffer.insert(state.buffer.end(), byte_buffer.begin(), byte_buffer.end());
-    state.fields;
+    if (field_line.empty()) { // detected last CRLF
+        return std::make_tuple(deserialize_request_process_fields(std::move(state)), field_line_offset, true);
+    }
+
+    // not limiting by max_size since field_line_result is already limited
+    const auto field_kv_result = try_find_unlimited(field_line, ":");
+    if (!field_kv_result.has_value()) {
+        return deserialize_request_process_complete_err(status_type::BAD_REQUEST);
+    }
+    const auto& [field_key, field_offset] = field_kv_result.value();
+    constexpr auto strip = [](std::string_view x) {
+        x = strip_prefix(x, tokens::SP);
+        x = strip_prefix(x, tokens::HTAB);
+        x = strip_suffix(x, tokens::SP);
+        x = strip_suffix(x, tokens::HTAB);
+        return x;
+    };
+    const auto field_value = strip(field_line.substr(field_offset));
+
+    const auto [field_kv_it, field_kv_is_emplaced] = state.fields.try_emplace(std::string{ field_key }, field_value);
+    std::ignore = field_kv_it;
+    if (!field_kv_is_emplaced) {
+        return deserialize_request_process_complete_err(status_type::BAD_REQUEST);
+    }
+
+    state.fields_byte_size_total += field_line_offset;
+    return std::make_tuple(std::move(state), field_line_offset, true);
 }
 
 std::tuple<deserialize_request_state, std::size_t, bool>
     deserialize_request_process(deserialize_request_state_body state, std::span<const std::byte> byte_buffer) {
-    // TODO
+    ASSERT(state.content_length > state.body.size());
+
+    const std::size_t content_length_left = state.content_length - state.body.size();
+    const std::size_t limited_byte_buffer_size = std::min(content_length_left, byte_buffer.size());
+    const auto limited_byte_buffer = byte_buffer.subspan(0, limited_byte_buffer_size);
+    state.body.insert(state.body.end(), limited_byte_buffer.begin(), limited_byte_buffer.end());
+
+    if (state.body.size() < state.content_length) {
+        return std::make_tuple(std::move(state), limited_byte_buffer_size, true);
+    }
+
+    ASSERT(state.body.size() == state.content_length);
+    return std::make_tuple(deserialize_request_state_complete{ std::move(state) }, limited_byte_buffer_size, true);
 }
 
 std::tuple<deserialize_request_state, std::size_t, bool>
     deserialize_request_process(deserialize_request_state_chunked_body state, std::span<const std::byte> byte_buffer) {
     // TODO
+    return deserialize_request_process_complete_err(status_type::BAD_REQUEST);
 }
 
 std::tuple<deserialize_request_state, std::size_t, bool> deserialize_request_process(
@@ -188,6 +267,7 @@ std::tuple<deserialize_request_state, std::size_t, bool> deserialize_request_pro
     std::span<const std::byte> byte_buffer
 ) {
     // TODO
+    return deserialize_request_process_complete_err(status_type::BAD_REQUEST);
 }
 
 std::tuple<deserialize_request_state, std::size_t, bool> deserialize_request_process(
