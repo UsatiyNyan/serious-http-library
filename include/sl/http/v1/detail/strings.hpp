@@ -5,13 +5,12 @@
 #pragma once
 
 #include <sl/meta/enum/to_string.hpp>
-#include <sl/meta/monad/maybe.hpp>
 #include <sl/meta/monad/result.hpp>
 
 #include <span>
 #include <string_view>
 
-namespace sl::http::v1::detail {
+namespace sl::http::v1::deserialize::detail {
 
 namespace tokens {
 
@@ -35,19 +34,23 @@ struct find_ok {
     std::size_t offset;
 };
 
+struct find_split_ok {
+    std::string_view head;
+    std::string_view tail;
+};
+
 // TODO: visited_bytes
 enum class find_err {
     NOT_FOUND,
     MAX_SIZE_EXCEEDED,
 };
 
-meta::result<find_ok, find_err>
-    try_find_limited(std::string_view str_buffer, std::string_view delim, std::size_t maybe_max_size);
-
 meta::result<find_ok, find_err> try_find_unlimited(std::string_view str_buffer, std::string_view delim);
+meta::result<find_ok, find_err> try_find(std::string_view str_buffer, std::string_view delim, std::size_t max_size);
 
-meta::maybe<std::tuple<std::string_view, std::string_view>>
-    try_find_split(std::string_view str_buffer, std::string_view delim);
+meta::result<find_split_ok, find_err> try_find_split_unlimited(std::string_view str_buffer, std::string_view delim);
+meta::result<find_split_ok, find_err>
+    try_find_split(std::string_view str_buffer, std::string_view delim, std::size_t max_size);
 
 template <typename EnumT>
 constexpr std::size_t enum_max_str_length() {
@@ -59,4 +62,4 @@ constexpr std::size_t enum_max_str_length() {
     return max_str_length;
 }
 
-} // namespace sl::http::v1::detail
+} // namespace sl::http::v1::deserialize::detail

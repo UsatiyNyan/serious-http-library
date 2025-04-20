@@ -8,7 +8,7 @@
 
 #include <bit>
 
-namespace sl::http::v1::detail {
+namespace sl::http::v1::deserialize::detail {
 
 std::string_view buffer_byte_to_str(std::span<const std::byte> byte_buffer) {
     const auto char_buffer = std::bit_cast<std::span<const char>>(byte_buffer);
@@ -32,8 +32,20 @@ std::string_view strip_suffix(std::string_view str, std::string_view suffix) {
     return str;
 }
 
-meta::result<find_ok, find_err>
-    try_find_limited(std::string_view str_buffer, std::string_view delim, std::size_t max_size) {
+meta::result<find_ok, find_err> try_find_unlimited(std::string_view str_buffer, std::string_view delim) {
+    const std::size_t it = str_buffer.find(delim);
+
+    if (it == std::string_view::npos) {
+        return meta::err(find_err::NOT_FOUND);
+    }
+
+    return find_ok{
+        .value = str_buffer.substr(0, it),
+        .offset = it + delim.size(),
+    };
+}
+
+meta::result<find_ok, find_err> try_find(std::string_view str_buffer, std::string_view delim, std::size_t max_size) {
     // avoiding integer overflows
     if (!DEBUG_ASSERT_VAL(max_size <= str_buffer.max_size() - delim.size())) {
         // TODO: .visited_bytes = 0,
@@ -55,32 +67,25 @@ meta::result<find_ok, find_err>
     });
 }
 
-meta::result<find_ok, find_err> try_find_unlimited(std::string_view str_buffer, std::string_view delim) {
-    const std::size_t it = str_buffer.find(delim);
-
-    if (it == std::string_view::npos) {
-        return meta::err(find_err::NOT_FOUND);
-    }
-
-    return find_ok{
-        .value = str_buffer.substr(0, it),
-        .offset = it + delim.size(),
-    };
-}
-
-meta::maybe<std::tuple<std::string_view, std::string_view>>
-    try_find_split(std::string_view str_buffer, std::string_view delim) {
-    if (str_buffer.empty()) {
-        return meta::null;
-    }
-
+meta::result<find_split_ok, find_err> try_find_split_unlimited(std::string_view str_buffer, std::string_view delim) {
     const auto result = try_find_unlimited(str_buffer, delim);
     if (!result.has_value()) {
-        return std::make_tuple(str_buffer, std::string_view{});
+        return meta::err(result.error());
     }
-
     const auto value = result.value();
-    return std::make_tuple(value.value, str_buffer.substr(value.offset));
+
+    return find_split_ok{ .head = value.value, .tail = str_buffer.substr(value.offset) };
 }
 
-} // namespace sl::http::v1::detail
+meta::result<find_split_ok, find_err>
+    try_find_split(std::string_view str_buffer, std::string_view delim, std::size_t max_size) {
+    const auto result = try_find(str_buffer, delim, max_size);
+    if (!result.has_value()) {
+        return meta::err(result.error());
+    }
+    const auto value = result.value();
+
+    return find_split_ok{ .head = value.value, .tail = str_buffer.substr(value.offset) };
+}
+
+} // namespace sl::http::v1::deserialize::detail
