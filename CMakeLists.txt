@@ -21,10 +21,12 @@ project(
         HOMEPAGE_URL "TODO"
         LANGUAGES C CXX)
 
-add_library(${PROJECT_NAME} INTERFACE)
+add_library(${PROJECT_NAME} STATIC
+    src/v1/detail/strings.cpp
+    )
 add_library(sl::http ALIAS ${PROJECT_NAME})
 
-target_include_directories(${PROJECT_NAME} INTERFACE include)
+target_include_directories(${PROJECT_NAME} PUBLIC include)
 
 add_subdirectory(dependencies)
 

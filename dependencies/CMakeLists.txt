@@ -6,7 +6,7 @@ cpmaddpackage(
         GIT_TAG main)
 
 sl_target_link_system_libraries(${PROJECT_NAME}
-        INTERFACE
+        PUBLIC
         # serious libraries
         sl::meta
 )
