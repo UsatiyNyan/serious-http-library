@@ -12,3 +12,6 @@ HTTP parsing and serialization:
 
 - [ ] v1:
     - [ ] validation
+    - [ ] token validation
+    - [ ] arbitrary tokens
+    - [ ] "visited bytes"
