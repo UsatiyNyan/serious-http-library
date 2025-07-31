@@ -24,6 +24,7 @@ project(
 add_library(${PROJECT_NAME} STATIC
     src/v1/detail/strings.cpp
     src/v1/detail/deserialize_request.cpp
+    src/v1/deserialize.cpp
 )
 add_library(sl::http ALIAS ${PROJECT_NAME})
 
