@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <sl/meta/enum/to_string.hpp>
 #include <sl/meta/monad/result.hpp>
 
@@ -14,12 +15,12 @@ namespace sl::http::v1::deserialize::detail {
 
 namespace tokens {
 
-constexpr std::string_view CR = "\r";
-constexpr std::string_view LF = "\n";
-constexpr std::string_view CRLF = "\r\n";
 constexpr std::string_view SP = " ";
 constexpr std::string_view HTAB = "\t";
+constexpr std::string_view CRLF = "\r\n";
 constexpr std::string_view HTTP = "HTTP";
+
+constexpr auto is_ws(char c) { return c == ' ' || c == '\t'; }
 
 } // namespace tokens
 
@@ -28,6 +29,22 @@ std::span<const std::byte> buffer_str_to_byte(std::string_view str_buffer);
 
 std::string_view strip_prefix(std::string_view str, std::string_view prefix);
 std::string_view strip_suffix(std::string_view str, std::string_view suffix);
+
+std::string_view strip_prefix(std::string_view str, char prefix);
+std::string_view strip_suffix(std::string_view str, char suffix);
+
+inline std::string_view strip_prefix_while(std::string_view str, std::predicate<char> auto pred) {
+    auto it = std::find_if_not(str.begin(), str.end(), std::move(pred));
+    const auto prefix_length = std::distance(str.begin(), it);
+    str.remove_prefix(static_cast<std::size_t>(prefix_length));
+    return str;
+}
+inline std::string_view strip_suffix_while(std::string_view str, std::predicate<char> auto pred) {
+    auto it = std::find_if_not(str.rbegin(), str.rend(), std::move(pred));
+    const auto suffix_length = std::distance(str.rbegin(), it);
+    str.remove_suffix(static_cast<std::size_t>(suffix_length));
+    return str;
+}
 
 struct find_ok {
     std::string_view value;

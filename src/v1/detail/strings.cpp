@@ -32,6 +32,18 @@ std::string_view strip_suffix(std::string_view str, std::string_view suffix) {
     return str;
 }
 
+std::string_view strip_prefix(std::string_view str, char prefix) {
+    const std::size_t prefix_length = str.starts_with(prefix) ? 1 : 0;
+    str.remove_prefix(prefix_length);
+    return str;
+}
+
+std::string_view strip_suffix(std::string_view str, char suffix) {
+    const std::size_t suffix_length = str.ends_with(suffix) ? 1 : 0;
+    str.remove_suffix(suffix_length);
+    return str;
+}
+
 meta::result<find_ok, find_err> try_find_unlimited(std::string_view str_buffer, std::string_view delim) {
     const std::size_t it = str_buffer.find(delim);
 

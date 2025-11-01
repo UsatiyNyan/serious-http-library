@@ -6,7 +6,7 @@
 
 #include <gtest/gtest.h>
 
-namespace sl::http::v1::detail {
+namespace sl::http::v1::deserialize::detail {
 
 enum class test_enum {
     CCC,
@@ -58,6 +58,21 @@ TEST(v1DetailStrings, stripPrefix) {
     EXPECT_EQ(strip_prefix("\tabcd\t", "\t"), "abcd\t");
 }
 
+TEST(v1DetailStrings, stripSuffixWhile) {
+    EXPECT_EQ(strip_suffix_while("abcd", tokens::is_ws), "abcd");
+    EXPECT_EQ(strip_suffix_while("ab cd", tokens::is_ws), "ab cd");
+    EXPECT_EQ(strip_suffix_while(" abcd", tokens::is_ws), " abcd");
+    EXPECT_EQ(strip_suffix_while("  abcd  ", tokens::is_ws), "  abcd");
+    EXPECT_EQ(strip_suffix_while("\tabcd\t \t\t\t", tokens::is_ws), "\tabcd");
+}
+
+TEST(v1DetailStrings, stripPrefixWhile) {
+    EXPECT_EQ(strip_prefix_while("abcd", tokens::is_ws), "abcd");
+    EXPECT_EQ(strip_prefix_while("ab\tcd", tokens::is_ws), "ab\tcd");
+    EXPECT_EQ(strip_prefix_while("abcd \t", tokens::is_ws), "abcd \t");
+    EXPECT_EQ(strip_prefix_while("  abcd  ", tokens::is_ws), "abcd  ");
+    EXPECT_EQ(strip_prefix_while("\t\t\t\t  \tabcd\t", tokens::is_ws), "abcd\t");
+}
 TEST(v1DetailStrings, tryFindUnlimited) {
     {
         const std::string_view haystack = "hayhayhayhayneedlehayhayhay";
@@ -98,7 +113,7 @@ TEST(v1DetailStrings, tryFindLimited) {
     {
         const std::string_view haystack = "hayhayhayhayneedlehayhayhay";
         const std::string_view needle = "needle";
-        const auto result = try_find_limited(haystack, needle, haystack.size() - needle.size());
+        const auto result = try_find(haystack, needle, haystack.size() - needle.size());
         ASSERT_TRUE(result.has_value());
         const auto [prefix, offset] = result.value();
         EXPECT_EQ(prefix, "hayhayhayhay");
@@ -109,7 +124,7 @@ TEST(v1DetailStrings, tryFindLimited) {
     {
         const std::string_view haystack = "hayhayhayhayhayhayhayneedle";
         const std::string_view needle = "needle";
-        const auto result = try_find_limited(haystack, needle, haystack.size() - needle.size());
+        const auto result = try_find(haystack, needle, haystack.size() - needle.size());
         ASSERT_TRUE(result.has_value());
         const auto [prefix, offset] = result.value();
         EXPECT_EQ(prefix, "hayhayhayhayhayhayhay");
@@ -120,7 +135,7 @@ TEST(v1DetailStrings, tryFindLimited) {
     {
         const std::string_view haystack = "hayhayhayhayhayhayhayneedle";
         const std::string_view needle = "needle";
-        const auto result = try_find_limited(haystack, needle, haystack.size() - needle.size() - 1);
+        const auto result = try_find(haystack, needle, haystack.size() - needle.size() - 1);
         ASSERT_FALSE(result.has_value());
         const auto error = result.error();
         EXPECT_EQ(error, find_err::MAX_SIZE_EXCEEDED);
@@ -129,7 +144,7 @@ TEST(v1DetailStrings, tryFindLimited) {
     {
         const std::string_view haystack = "hayhayhayhayneedlehayhayhay";
         const std::string_view needle = "needle";
-        const auto result = try_find_limited(haystack, needle, haystack.max_size() - needle.size());
+        const auto result = try_find(haystack, needle, haystack.max_size() - needle.size());
         ASSERT_TRUE(result.has_value());
         const auto [prefix, offset] = result.value();
         EXPECT_EQ(prefix, "hayhayhayhay");
@@ -141,7 +156,7 @@ TEST(v1DetailStrings, tryFindLimited) {
     {
         const std::string_view haystack = "hayhayhayhayneedlehayhayhay";
         const std::string_view needle = "needle";
-        const auto result = try_find_limited(haystack, needle, haystack.max_size() - needle.size() + 1);
+        const auto result = try_find(haystack, needle, haystack.max_size() - needle.size() + 1);
         ASSERT_FALSE(result.has_value());
         const auto error = result.error();
         EXPECT_EQ(error, find_err::MAX_SIZE_EXCEEDED);
@@ -150,7 +165,7 @@ TEST(v1DetailStrings, tryFindLimited) {
 
     {
         const std::string_view haystack = "hayhayhayhayneedlehayhayhay";
-        const auto result = try_find_limited(haystack, "somethingelse", haystack.size());
+        const auto result = try_find(haystack, "somethingelse", haystack.size());
         ASSERT_FALSE(result.has_value());
         const auto error = result.error();
         EXPECT_EQ(error, find_err::NOT_FOUND);
@@ -159,12 +174,12 @@ TEST(v1DetailStrings, tryFindLimited) {
 
 TEST(v1DetailStrings, tryFindSplit) {
     {
-        const auto result = try_find_split("", ", ");
+        const auto result = try_find_split_unlimited("", ", ");
         ASSERT_FALSE(result.has_value());
     }
 
     {
-        const auto result = try_find_split("nonempty", ", ");
+        const auto result = try_find_split_unlimited("nonempty", ", ");
         ASSERT_TRUE(result.has_value());
         const auto [found, remainder] = result.value();
         EXPECT_EQ(found, "nonempty");
@@ -173,7 +188,7 @@ TEST(v1DetailStrings, tryFindSplit) {
     const std::string_view series_str = "aaa, bbb, ccc, dddd";
 
     {
-        const auto result = try_find_split(series_str, ",");
+        const auto result = try_find_split_unlimited(series_str, ",");
         ASSERT_TRUE(result.has_value());
         const auto [found, remainder] = result.value();
         EXPECT_EQ(found, "aaa");
@@ -181,7 +196,7 @@ TEST(v1DetailStrings, tryFindSplit) {
     }
 
     {
-        const auto result = try_find_split(series_str, ", ");
+        const auto result = try_find_split_unlimited(series_str, ", ");
         ASSERT_TRUE(result.has_value());
         const auto [found, remainder] = result.value();
         EXPECT_EQ(found, "aaa");
@@ -191,7 +206,7 @@ TEST(v1DetailStrings, tryFindSplit) {
     {
         std::string_view series_state = series_str;
         std::vector<std::string_view> series_values;
-        while (const auto maybe_next = try_find_split(series_state, ", ")) {
+        while (const auto maybe_next = try_find_split_unlimited(series_state, ", ")) {
             const auto [next, remainder] = maybe_next.value();
             series_values.push_back(next);
             series_state = remainder;
@@ -206,4 +221,4 @@ TEST(v1DetailStrings, tryFindSplit) {
     }
 }
 
-} // namespace sl::http::v1::detail
+} // namespace sl::http::v1::deserialize::detail

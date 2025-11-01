@@ -208,7 +208,7 @@ parse_result<meta::result<request_state, status_type>>
 
 // *( field-line CRLF ) CRLF
 // field-line   = field-name ":" OWS field-value OWS
-// OWS = SP / HTAB
+// OWS = *(SP / HTAB)
 parse_result<meta::result<request_state, status_type>> parse_request_part(
     request_message& output,
     std::variant<request_state_fields, request_state_trailing_fields> state,
@@ -249,10 +249,8 @@ parse_result<meta::result<request_state, status_type>> parse_request_part(
     }
     const auto& [field_key, field_offset] = field_kv_result.value();
     constexpr auto strip = [](std::string_view x) {
-        x = strip_prefix(x, tokens::SP);
-        x = strip_prefix(x, tokens::HTAB);
-        x = strip_suffix(x, tokens::SP);
-        x = strip_suffix(x, tokens::HTAB);
+        x = strip_prefix_while(x, tokens::is_ws);
+        x = strip_suffix_while(x, tokens::is_ws);
         return x;
     };
     const auto field_value = strip(field_line.substr(field_offset));
@@ -358,13 +356,12 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
                 constexpr std::size_t max_chunk_size_size = 8;
 
                 // +1 accounting for BWS
-                if (const auto ext_result = try_find(buffer_byte_to_str(buffer), ";", max_chunk_size_size + 1);
+                if (const auto ext_result = try_find_unlimited(buffer_byte_to_str(buffer), ";");
                     ext_result.has_value()) {
                     auto ext_ok = ext_result.value();
 
                     // BWS
-                    ext_ok.value = strip_suffix(ext_ok.value, tokens::SP);
-                    ext_ok.value = strip_suffix(ext_ok.value, tokens::HTAB);
+                    ext_ok.value = strip_suffix_while(ext_ok.value, tokens::is_ws);
                     if (ext_ok.value.size() > max_chunk_size_size) {
                         return make_parse_chunk_stop(status_type::BAD_REQUEST);
                     }
@@ -416,11 +413,12 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
                     return make_parse_chunk_stop(state);
                 }
                 const auto chunk_ext_ok = chunk_ext_result.value();
+                const auto chunk_ext = strip_prefix_while(chunk_ext_ok.value, tokens::is_ws);
 
                 if (a_state.chunk_size == 0) { // last-chunk
                     return make_parse_chunk_more(
                         request_state_chunked_body_complete{
-                            .chunk_ext = chunk_ext_ok.value,
+                            .chunk_ext = chunk_ext,
                             .chunk{},
                         },
                         chunk_ext_ok.offset
@@ -430,7 +428,7 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
                 return make_parse_chunk_more(
                     request_state_chunked_body_ext{
                         .chunk_size = a_state.chunk_size,
-                        .chunk_ext = chunk_ext_ok.value,
+                        .chunk_ext = chunk_ext,
                     },
                     chunk_ext_ok.offset
                 );
