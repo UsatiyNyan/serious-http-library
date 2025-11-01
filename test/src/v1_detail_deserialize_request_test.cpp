@@ -5,11 +5,18 @@
 #include "sl/http/v1/deserialize/request.hpp"
 #include "sl/http/v1/detail/strings.hpp"
 
+#include <gtest/gtest.h>
+
 #include <exception>
 #include <fmt/core.h>
-#include <gtest/gtest.h>
 #include <sl/exec.hpp>
 #include <variant>
+
+namespace std {
+bool operator==(const vector<byte>& body, const span<const byte>& expected) {
+    return body.size() == expected.size() && equal(body.begin(), body.end(), expected.begin());
+}
+} // namespace std
 
 namespace sl::meta {
 bool operator==(unit, unit) { return true; }
@@ -74,15 +81,79 @@ TEST_F(DeserializeRequestTest, EmptyInput) {
 TEST_F(DeserializeRequestTest, ValidInput) {
     auto result = drain(request(full("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result.value().method, method_type::GET);
-    EXPECT_EQ(result.value().target, "/");
-    EXPECT_EQ(result.value().version, version_type::HTTPv1_1);
+    EXPECT_EQ(result->method, method_type::GET);
+    EXPECT_EQ(result->target, "/");
+    EXPECT_EQ(result->version, version_type::HTTPv1_1);
 }
 
 TEST_F(DeserializeRequestTest, InvalidInput) {
     auto result = drain(request(full("INVALID REQUEST")));
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), drain_error(status_type::BAD_REQUEST));
+}
+
+TEST_F(DeserializeRequestTest, ValidInputWithBody) {
+    auto result =
+        drain(request(full("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\nHello, World!")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->method, method_type::POST);
+    EXPECT_EQ(result->target, "/submit");
+    EXPECT_EQ(result->version, version_type::HTTPv1_1);
+    EXPECT_EQ(result->body, detail::buffer_str_to_byte("Hello, World!"));
+}
+
+TEST_F(DeserializeRequestTest, OneByOneInput) {
+    auto result = drain(request(one_by_one("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->method, method_type::GET);
+    EXPECT_EQ(result->target, "/");
+    EXPECT_EQ(result->version, version_type::HTTPv1_1);
+}
+
+TEST_F(DeserializeRequestTest, OneByOneInputWithBody) {
+    auto result = drain(
+        request(one_by_one("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\nHello, World!"))
+    );
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result.value().method, method_type::POST);
+    EXPECT_EQ(result.value().target, "/submit");
+    EXPECT_EQ(result.value().version, version_type::HTTPv1_1);
+    EXPECT_EQ(result.value().body, detail::buffer_str_to_byte("Hello, World!"));
+}
+
+TEST_F(DeserializeRequestTest, ValidInputWithHeaders) {
+    auto result = drain(request(full("GET /resource HTTP/1.1\r\nHost: example.com\r\nUser-Agent: Test\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result.value().method, method_type::GET);
+    EXPECT_EQ(result.value().target, "/resource");
+    EXPECT_EQ(result.value().version, version_type::HTTPv1_1);
+    EXPECT_EQ(result.value().fields["Host"], "example.com");
+    EXPECT_EQ(result.value().fields["User-Agent"], "Test");
+}
+
+TEST_F(DeserializeRequestTest, ValidInputWithChunkedBody) {
+    auto result = drain(request(full("POST /upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nHello\r\n0\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result.value().method, method_type::POST);
+    EXPECT_EQ(result.value().target, "/upload");
+    EXPECT_EQ(result.value().version, version_type::HTTPv1_1);
+    EXPECT_EQ(result.value().body, detail::buffer_str_to_byte("Hello"));
+}
+
+TEST_F(DeserializeRequestTest, InvalidInputWithMissingHeaders) {
+    auto result = drain(request(full("GET / HTTP/1.1\r\n\r\n")));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), drain_error(status_type::BAD_REQUEST));
+}
+
+TEST_F(DeserializeRequestTest, ValidInputWithLongBody) {
+    std::string long_body(1000, 'a');
+    auto result = drain(request(full(fmt::format("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: {}\r\n\r\n{}", long_body.size(), long_body))));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result.value().method, method_type::POST);
+    EXPECT_EQ(result.value().target, "/submit");
+    EXPECT_EQ(result.value().version, version_type::HTTPv1_1);
+    EXPECT_EQ(result.value().body, detail::buffer_str_to_byte(long_body));
 }
 
 } // namespace sl::http::v1::deserialize
