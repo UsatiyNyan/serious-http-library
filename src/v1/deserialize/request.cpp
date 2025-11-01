@@ -26,80 +26,101 @@ exec::async_gen<request_chunk, io_result<request_result>>
 
     detail::request_state state;
     request_message output;
-    detail::remainder_buffer<> remainder;
 
-    while (const auto maybe_byte_buffer = co_await input) {
-        auto byte_buffer = maybe_byte_buffer.value();
-
-        if (remainder.view().empty()) { // less allocations and copying
-            while (!byte_buffer.empty()) {
-                const auto [new_state_or_err, offset] = detail::parse_request(output, state, byte_buffer);
+    const auto do_parse = [&](auto get_buffer, auto cond, auto add_offset
+                          ) -> exec::async_gen<request_chunk, meta::result<meta::unit, status_type>> {
+        while (cond()) {
+            auto* const chunked_state = std::get_if<detail::request_state_chunked_body>(&state);
+            if (chunked_state == nullptr) {
+                const auto [new_state_or_err, offset] = detail::parse_request(output, state, get_buffer());
 
                 if (!new_state_or_err.has_value()) {
-                    co_return request_result{ meta::err(new_state_or_err.error()) };
+                    co_return meta::err(new_state_or_err.error());
                 }
                 state = new_state_or_err.value();
 
                 if (offset == 0) {
                     break;
                 }
-                byte_buffer = byte_buffer.subspan(offset);
+                add_offset(offset);
+            } else {
+                const auto [new_chunked_state_or_err, offset] =
+                    detail::parse_request_chunk(output, *chunked_state, get_buffer());
+
+                if (!new_chunked_state_or_err.has_value()) {
+                    co_return meta::err(new_chunked_state_or_err.error());
+                }
+                const auto new_chunked_state = new_chunked_state_or_err.value();
+
+                if (auto* const a_chunked_complete_state =
+                        std::get_if<detail::request_state_chunked_body_complete>(&new_chunked_state);
+                    a_chunked_complete_state != nullptr) {
+
+                    co_yield request_chunk{
+                        .message = output,
+                        .chunk_ext = a_chunked_complete_state->chunk_ext,
+                        .chunk = a_chunked_complete_state->chunk,
+                    };
+
+                    if (a_chunked_complete_state->chunk.empty()) { // detected last-chunk
+                        state = detail::request_state_trailing_fields{};
+                    } else {
+                        state = detail::request_state_chunked_body{ detail::request_state_chunked_body_empty{} };
+                    }
+                } else {
+                    state = new_chunked_state_or_err.value();
+                }
+
+                if (offset == 0) {
+                    break;
+                }
+                add_offset(offset);
+            }
+        }
+
+        co_return meta::unit{};
+    };
+
+    detail::remainder_buffer<> remainder;
+    while (const auto maybe_byte_buffer = co_await input) {
+        auto byte_buffer = maybe_byte_buffer.value();
+
+        if (remainder.view().empty()) { // less allocations and copying
+            auto asyncgen = do_parse(
+                [&] { return byte_buffer; },
+                [&] { return !byte_buffer.empty(); },
+                [&](std::size_t offset) { byte_buffer = byte_buffer.subspan(offset); }
+            );
+            while (true) {
+                auto intermediate = co_await asyncgen;
+                if (!intermediate.has_value()) {
+                    break;
+                }
+                co_yield intermediate.value();
+            }
+            const auto result = std::move(asyncgen).result_or_throw();
+            if (!result.has_value()) {
+                co_return request_result{ meta::err(result.error()) };
             }
         }
 
         std::ignore = remainder.merge(byte_buffer);
 
+        auto asyncgen = do_parse(
+            [&] { return remainder.view(); },
+            [] { return true; },
+            [&](std::size_t offset) { remainder.add_offset(offset); }
+        );
         while (true) {
-            const auto [new_state_or_err, offset] = detail::parse_request(output, state, remainder.view());
-
-            if (!new_state_or_err.has_value()) {
-                co_return request_result{ meta::err(new_state_or_err.error()) };
-            }
-            state = new_state_or_err.value();
-
-            if (offset == 0) {
+            auto intermediate = co_await asyncgen;
+            if (!intermediate.has_value()) {
                 break;
             }
-            remainder.add_offset(offset);
+            co_yield intermediate.value();
         }
-
-        while (true) {
-            auto* const a_state = std::get_if<detail::request_state_chunked_body>(&state);
-            if (a_state == nullptr) {
-                break;
-            }
-
-            const auto [new_chunked_state_or_err, offset] =
-                detail::parse_request_chunk(output, *a_state, remainder.view());
-
-            if (!new_chunked_state_or_err.has_value()) {
-                co_return request_result{ meta::err(new_chunked_state_or_err.error()) };
-            }
-            const auto new_chunked_state = new_chunked_state_or_err.value();
-
-            if (auto* const a_chunked_complete_state =
-                    std::get_if<detail::request_state_chunked_body_complete>(&new_chunked_state);
-                a_chunked_complete_state != nullptr) {
-
-                co_yield request_chunk{
-                    .message = output,
-                    .chunk_ext = a_chunked_complete_state->chunk_ext,
-                    .chunk = a_chunked_complete_state->chunk,
-                };
-
-                if (a_chunked_complete_state->chunk.empty()) { // detected last-chunk
-                    state = detail::request_state_trailing_fields{};
-                } else {
-                    state = detail::request_state_chunked_body{ detail::request_state_chunked_body_empty{} };
-                }
-            } else {
-                state = new_chunked_state_or_err.value();
-            }
-
-            if (offset == 0) {
-                break;
-            }
-            remainder.add_offset(offset);
+        const auto result = std::move(asyncgen).result_or_throw();
+        if (!result.has_value()) {
+            co_return request_result{ meta::err(result.error()) };
         }
 
         if (std::holds_alternative<detail::request_state_complete>(state)) {
