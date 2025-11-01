@@ -160,6 +160,22 @@ TEST_F(DeserializeRequestTest, ValidInputWithChunkedBody) {
     EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
 }
 
+TEST_F(DeserializeRequestTest, ValidInputOneByOneWithChunkedBody) {
+    std::vector<std::byte> chunks_buffer;
+    auto result = drain(
+        request(one_by_one(
+            "POST /upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nHello\r\n0\r\n\r\n"
+        )),
+        &chunks_buffer
+    );
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->method, method_type::POST);
+    EXPECT_EQ(result->target, "/upload");
+    EXPECT_EQ(result->version, version_type::HTTPv1_1);
+    EXPECT_TRUE(result->body.empty());
+    EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
+}
+
 TEST_F(DeserializeRequestTest, InvalidInputWithMissingHeaders) {
     // NOT HANDLED FOR NOW
     auto result = drain(request(full("GET / HTTP/1.1\r\n\r\n")));
