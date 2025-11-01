@@ -2,478 +2,87 @@
 // Created by usatiynyan.
 //
 
-#include "sl/http/v1/detail/deserialize_request.hpp"
+#include "sl/http/v1/deserialize/request.hpp"
 #include "sl/http/v1/detail/strings.hpp"
 
+#include <exception>
+#include <fmt/core.h>
 #include <gtest/gtest.h>
-
+#include <sl/exec.hpp>
 #include <variant>
 
-namespace sl::http::v1::detail::deserialize {
-namespace request {
+namespace sl::meta {
+bool operator==(unit, unit) { return true; }
+} // namespace sl::meta
 
-TEST(requestEmpty, toEmpty) {
-    const auto result = state_empty{}.process({});
-    EXPECT_TRUE(std::holds_alternative<state_empty>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
+namespace sl::http::v1::deserialize {
 
-TEST(requestEmpty, toEmptyShort) {
-    const auto result = state_empty{}.process(buffer_str_to_byte("POST"));
-    EXPECT_TRUE(std::holds_alternative<state_empty>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
+class DeserializeRequestTest : public ::testing::Test {
+protected:
+    exec::async_gen<std::span<const std::byte>, std::error_code> full(std::string_view input) {
+        co_yield detail::buffer_str_to_byte(input);
+        co_return std::error_code{};
+    }
 
-TEST(requestEmpty, toCompleteError) {
-    const auto result = state_empty{}.process(buffer_str_to_byte("hehe ..."));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_FALSE(s_c->result.has_value());
-    EXPECT_EQ(s_c->result.error(), status_type::BAD_REQUEST);
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestEmpty, toMethod) {
-    const auto result = state_empty{}.process(buffer_str_to_byte("POST ..."));
-    const auto* s_m = std::get_if<state_method>(&result.state_variant);
-    ASSERT_TRUE(s_m);
-    EXPECT_EQ(s_m->method, method_type::POST);
-    EXPECT_EQ(result.offset, 5);
-    EXPECT_TRUE(result.can_continue);
-}
-
-TEST(requestMethod, toMethod) {
-    const auto result = state_method{ state_empty{}, method_type::GET }.process(buffer_str_to_byte(" "));
-    EXPECT_TRUE(std::holds_alternative<state_method>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestMethod, toCompleteError) {
-    const auto result = state_method{ state_empty{}, method_type::GET }.process(buffer_str_to_byte("INVALID"));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_FALSE(s_c->result.has_value());
-    EXPECT_EQ(s_c->result.error(), status_type::BAD_REQUEST);
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestMethod, toTarget) {
-    const auto result = state_method{ state_empty{}, method_type::GET }.process(buffer_str_to_byte("/path "));
-    const auto* s_t = std::get_if<state_target>(&result.state_variant);
-    ASSERT_TRUE(s_t);
-    EXPECT_EQ(s_t->target, "/path");
-    EXPECT_EQ(result.offset, 6);
-    EXPECT_TRUE(result.can_continue);
-}
-
-TEST(requestTarget, toTarget) {
-    const auto result =
-        state_target{ state_method{ state_empty{}, method_type::GET }, "/path" }.process(buffer_str_to_byte(" "));
-    EXPECT_TRUE(std::holds_alternative<state_target>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestTarget, toCompleteError) {
-    const auto result =
-        state_target{ state_method{ state_empty{}, method_type::GET }, "/path" }.process(buffer_str_to_byte("INVALID"));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_FALSE(s_c->result.has_value());
-    EXPECT_EQ(s_c->result.error(), status_type::BAD_REQUEST);
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestTarget, toVersion) {
-    const auto result =
-        state_target{
-            state_method{ state_empty{}, method_type::GET },
-            "/path",
+    exec::async_gen<std::span<const std::byte>, std::error_code> one_by_one(std::string_view input) {
+        for (const std::byte byte : detail::buffer_str_to_byte(input)) {
+            std::array<std::byte, 1> buffer{ byte };
+            co_yield buffer;
         }
-            .process(buffer_str_to_byte("HTTP/1.1 "));
-    const auto* s_v = std::get_if<state_version>(&result.state_variant);
-    ASSERT_TRUE(s_v);
-    EXPECT_EQ(s_v->version, version_type::HTTPv1_1);
-    EXPECT_EQ(result.offset, 8);
-    EXPECT_TRUE(result.can_continue);
-}
+        co_return std::error_code{};
+    }
 
-TEST(requestVersion, toVersion) {
-    const auto result =
-        state_version{
-            state_target{
-                state_method{ state_empty{}, method_type::GET },
-                "/path",
-            },
-            version_type::HTTPv1_1,
+    exec::async<io_result<request_result>>
+        drain_coro(exec::async_gen<request_chunk, io_result<request_result>> request_in_progress) {
+        while ((co_await request_in_progress).has_value()) {}
+        co_return std::move(request_in_progress).result_or_throw();
+    }
+
+    using drain_error = std::variant<meta::unit, std::exception_ptr, std::error_code, status_type>;
+    meta::result<request_message, drain_error>
+        drain(exec::async_gen<request_chunk, io_result<request_result>> request_in_progress) {
+        auto get_result = exec::as_signal(drain_coro(std::move(request_in_progress))) | exec::get<exec::nowait_event>();
+        if (!get_result.has_value()) {
+            fmt::println("err: unit");
+            return meta::err(meta::unit{});
         }
-            .process(buffer_str_to_byte("\r\n"));
-    EXPECT_TRUE(std::holds_alternative<state_version>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestVersion, toCompleteError) {
-    const auto result =
-        state_version{
-            state_target{
-                state_method{ state_empty{}, method_type::GET },
-                "/path",
-            },
-            version_type::HTTPv1_1,
+        auto coro_result = std::move(get_result).value();
+        if (!coro_result.has_value()) {
+            fmt::println("err: exception");
+            return meta::err(std::move(coro_result).error());
         }
-            .process(buffer_str_to_byte("INVALID"));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_FALSE(s_c->result.has_value());
-    EXPECT_EQ(s_c->result.error(), status_type::BAD_REQUEST);
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestVersion, toFields) {
-    const auto result =
-        state_version{
-            state_target{
-                state_method{ state_empty{}, method_type::GET },
-                "/path",
-            },
-            version_type::HTTPv1_1,
+        auto io_result = std::move(coro_result).value();
+        if (!io_result.has_value()) {
+            fmt::println("err: io: {}", io_result.error().message());
+            return meta::err(std::move(io_result).error());
         }
-            .process(buffer_str_to_byte("\r\n"));
-    const auto* s_f = std::get_if<state_fields>(&result.state_variant);
-    ASSERT_TRUE(s_f);
-    EXPECT_EQ(result.offset, 2);
-    EXPECT_TRUE(result.can_continue);
-}
-
-TEST(requestFields, toFieldsEmpty) {
-    const auto result = state_fields{
-        state_version{
-            state_target{
-                state_method{ state_empty{}, method_type::GET },
-                "/path",
-            },
-            version_type::HTTPv1_1,
+        auto request_result = std::move(io_result).value();
+        if (!request_result.has_value()) {
+            fmt::println("err: status: {}", static_cast<std::uint16_t>(request_result.error()));
+            return meta::err(std::move(request_result).error());
         }
-    }.process(buffer_str_to_byte("\r\n"));
-    EXPECT_TRUE(std::holds_alternative<state_fields>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
+        return std::move(request_result).value();
+    }
+};
+
+TEST_F(DeserializeRequestTest, EmptyInput) {
+    auto result = drain(request(full("")));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), drain_error(std::error_code{}));
 }
 
-TEST(requestFields, toFieldsPartial) {
-    const auto result = state_fields{
-        state_version{
-            state_target{
-                state_method{ state_empty{}, method_type::GET },
-                "/path",
-            },
-            version_type::HTTPv1_1,
-        }
-    }.process(buffer_str_to_byte("Host: example.com\r\n"));
-    EXPECT_TRUE(std::holds_alternative<state_fields>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
+TEST_F(DeserializeRequestTest, ValidInput) {
+    auto result = drain(request(full("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result.value().method, method_type::GET);
+    EXPECT_EQ(result.value().target, "/");
+    EXPECT_EQ(result.value().version, version_type::HTTPv1_1);
 }
 
-TEST(requestFields, toFieldsFull) {
-    const auto result = state_fields{
-        state_version{
-            state_target{
-                state_method{ state_empty{}, method_type::GET },
-                "/path",
-            },
-            version_type::HTTPv1_1,
-        }
-    }.process(buffer_str_to_byte("Host: example.com\r\n\r\n"));
-    const auto* s_b = std::get_if<state_body>(&result.state_variant);
-    ASSERT_TRUE(s_b);
-    EXPECT_EQ(result.offset, 19);
-    EXPECT_TRUE(result.can_continue);
+TEST_F(DeserializeRequestTest, InvalidInput) {
+    auto result = drain(request(full("INVALID REQUEST")));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), drain_error(status_type::BAD_REQUEST));
 }
 
-TEST(requestFields, toCompleteError) {
-    const auto result = state_fields{
-        state_version{
-            state_target{
-                state_method{ state_empty{}, method_type::GET },
-                "/path",
-            },
-            version_type::HTTPv1_1,
-        }
-    }.process(buffer_str_to_byte("INVALID"));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_FALSE(s_c->result.has_value());
-    EXPECT_EQ(s_c->result.error(), status_type::BAD_REQUEST);
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestFields, toBody) {
-    const auto result = state_fields{
-        state_version{
-            state_target{
-                state_method{ state_empty{}, method_type::GET },
-                "/path",
-            },
-            version_type::HTTPv1_1,
-        }
-    }.process(buffer_str_to_byte("Content-Length: 5\r\n\r\n"));
-    const auto* s_b = std::get_if<state_body>(&result.state_variant);
-    ASSERT_TRUE(s_b);
-    EXPECT_EQ(s_b->content_length, 5);
-    EXPECT_EQ(result.offset, 21);
-    EXPECT_TRUE(result.can_continue);
-}
-
-TEST(requestFields, toChunkedBody) {
-    const auto result = state_fields{
-        state_version{
-            state_target{
-                state_method{ state_empty{}, method_type::GET },
-                "/path",
-            },
-            version_type::HTTPv1_1,
-        }
-    }.process(buffer_str_to_byte("Transfer-Encoding: chunked\r\n\r\n"));
-    const auto* s_cb = std::get_if<state_chunked_body>(&result.state_variant);
-    ASSERT_TRUE(s_cb);
-    EXPECT_EQ(result.offset, 30);
-    EXPECT_TRUE(result.can_continue);
-}
-
-TEST(requestBody, toBodyEmpty) {
-    const auto result =
-        state_body{
-            state_fields{
-                state_version{
-                    state_target{
-                        state_method{ state_empty{}, method_type::GET },
-                        "/path",
-                    },
-                    version_type::HTTPv1_1,
-                },
-            },
-            5,
-        }
-            .process(buffer_str_to_byte(""));
-    EXPECT_TRUE(std::holds_alternative<state_body>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestBody, toBodyPartial) {
-    const auto result =
-        state_body{
-            state_fields{
-                state_version{
-                    state_target{
-                        state_method{ state_empty{}, method_type::GET },
-                        "/path",
-                    },
-                    version_type::HTTPv1_1,
-                },
-            },
-            5,
-        }
-            .process(buffer_str_to_byte("123"));
-    EXPECT_TRUE(std::holds_alternative<state_body>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestBody, toCompleteError) {
-    const auto result =
-        state_body{
-            state_fields{ state_version{
-                state_target{
-                    state_method{ state_empty{}, method_type::GET },
-                    "/path",
-                },
-                version_type::HTTPv1_1,
-            } },
-            5,
-        }
-            .process(buffer_str_to_byte("INVALID"));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_FALSE(s_c->result.has_value());
-    EXPECT_EQ(s_c->result.error(), status_type::BAD_REQUEST);
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestBody, toCompleteOk) {
-    const auto result =
-        state_body{
-            state_fields{ state_version{
-                state_target{
-                    state_method{ state_empty{}, method_type::GET },
-                    "/path",
-                },
-                version_type::HTTPv1_1,
-            } },
-            5,
-        }
-            .process(buffer_str_to_byte("12345"));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_TRUE(s_c->result.has_value());
-    EXPECT_EQ(result.offset, 5);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestChunkedBody, toChunkedBody) {
-    // TEST: toChunkedBody... with particular cases, when implemented
-}
-
-TEST(requestChunkedBody, toCompleteError) {
-    const auto result = state_chunked_body{
-        state_fields{
-            state_version{
-                state_target{
-                    state_method{ state_empty{}, method_type::GET },
-                    "/path",
-                },
-                version_type::HTTPv1_1,
-            },
-        }
-    }.process(buffer_str_to_byte("INVALID"));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_FALSE(s_c->result.has_value());
-    EXPECT_EQ(s_c->result.error(), status_type::BAD_REQUEST);
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestChunkedBody, toTrailingFields) {
-    const auto result = state_chunked_body{
-        state_fields{
-            state_version{
-                state_target{
-                    state_method{ state_empty{}, method_type::GET },
-                    "/path",
-                },
-                version_type::HTTPv1_1,
-            },
-        }
-    }.process(buffer_str_to_byte("0\r\n\r\n"));
-    const auto* s_tf = std::get_if<state_trailing_fields>(&result.state_variant);
-    ASSERT_TRUE(s_tf);
-    EXPECT_EQ(result.offset, 5);
-    EXPECT_TRUE(result.can_continue);
-}
-
-TEST(requestTrailingFields, toTrailingFieldsEmpty) {
-    const auto result = state_trailing_fields{
-        state_chunked_body{
-            state_fields{
-                state_version{
-                    state_target{
-                        state_method{ state_empty{}, method_type::GET },
-                        "/path",
-                    },
-                    version_type::HTTPv1_1,
-                },
-            },
-        }
-    }.process(buffer_str_to_byte("\r\n"));
-    EXPECT_TRUE(std::holds_alternative<state_trailing_fields>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestTrailingFields, toTrailingFieldsPartial) {
-    const auto result = state_trailing_fields{
-        state_chunked_body{
-            state_fields{
-                state_version{
-                    state_target{
-                        state_method{ state_empty{}, method_type::GET },
-                        "/path",
-                    },
-                    version_type::HTTPv1_1,
-                },
-            },
-        }
-    }.process(buffer_str_to_byte("Trailer: value\r\n"));
-    EXPECT_TRUE(std::holds_alternative<state_trailing_fields>(result.state_variant));
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestTrailingFields, toTrailingFieldsFull) {
-    const auto result = state_trailing_fields{
-        state_chunked_body{
-            state_fields{
-                state_version{
-                    state_target{
-                        state_method{ state_empty{}, method_type::GET },
-                        "/path",
-                    },
-                    version_type::HTTPv1_1,
-                },
-            },
-        }
-    }.process(buffer_str_to_byte("Trailer: value\r\n\r\n"));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_TRUE(s_c->result.has_value());
-    EXPECT_EQ(result.offset, 17);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestTrailingFields, toCompleteError) {
-    const auto result = state_trailing_fields{
-        state_chunked_body{
-            state_fields{
-                state_version{
-                    state_target{
-                        state_method{ state_empty{}, method_type::GET },
-                        "/path",
-                    },
-                    version_type::HTTPv1_1,
-                },
-            },
-        }
-    }.process(buffer_str_to_byte("INVALID"));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_FALSE(s_c->result.has_value());
-    EXPECT_EQ(s_c->result.error(), status_type::BAD_REQUEST);
-    EXPECT_EQ(result.offset, 0);
-    EXPECT_FALSE(result.can_continue);
-}
-
-TEST(requestTrailingFields, toCompleteOk) {
-    const auto result = state_trailing_fields{
-        state_chunked_body{
-            state_fields{
-                state_version{
-                    state_target{
-                        state_method{ state_empty{}, method_type::GET },
-                        "/path",
-                    },
-                    version_type::HTTPv1_1,
-                },
-            },
-        }
-    }.process(buffer_str_to_byte("\r\n"));
-    const auto* s_c = std::get_if<state_complete>(&result.state_variant);
-    ASSERT_TRUE(s_c);
-    ASSERT_TRUE(s_c->result.has_value());
-    EXPECT_EQ(result.offset, 2);
-    EXPECT_FALSE(result.can_continue);
-}
-
-} // namespace request
-} // namespace sl::http::v1::detail::deserialize
+} // namespace sl::http::v1::deserialize

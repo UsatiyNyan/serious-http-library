@@ -316,11 +316,12 @@ meta::result<request_state, status_type>
             return content_length;
         });
 
-    if (!maybe_content_length.has_value()) {
-        return meta::err(status_type::BAD_REQUEST);
+    const auto content_length = maybe_content_length.value_or(0);
+    if (content_length == 0) {
+        return request_state_complete{};
     }
 
-    return request_state_body{ .content_length = maybe_content_length.value() };
+    return request_state_body{ .content_length = content_length };
 }
 parse_result<meta::result<request_state, status_type>>
     parse_request_part(request_message& output, request_state_body state, std::span<const std::byte> buffer) {
