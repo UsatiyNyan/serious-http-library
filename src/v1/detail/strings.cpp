@@ -79,25 +79,20 @@ meta::result<find_ok, find_err> try_find(std::string_view str_buffer, std::strin
     });
 }
 
-meta::result<find_split_ok, find_err> try_find_split_unlimited(std::string_view str_buffer, std::string_view delim) {
+find_split_result try_find_split_unlimited(std::string_view str_buffer, std::string_view delim) {
     const auto result = try_find_unlimited(str_buffer, delim);
     if (!result.has_value()) {
-        return meta::err(result.error());
+        return find_split_result{ .head = str_buffer, .tail = meta::err(result.error()) };
     }
-    const auto value = result.value();
-
-    return find_split_ok{ .head = value.value, .tail = str_buffer.substr(value.offset) };
+    return find_split_result{ .head = result->value, .tail = str_buffer.substr(result->offset) };
 }
 
-meta::result<find_split_ok, find_err>
-    try_find_split(std::string_view str_buffer, std::string_view delim, std::size_t max_size) {
+find_split_result try_find_split(std::string_view str_buffer, std::string_view delim, std::size_t max_size) {
     const auto result = try_find(str_buffer, delim, max_size);
     if (!result.has_value()) {
-        return meta::err(result.error());
+        return find_split_result{ .head = str_buffer, .tail = meta::err(result.error()) };
     }
-    const auto value = result.value();
-
-    return find_split_ok{ .head = value.value, .tail = str_buffer.substr(value.offset) };
+    return find_split_result{ .head = result->value, .tail = str_buffer.substr(result->offset) };
 }
 
 } // namespace sl::http::v1::deserialize::detail

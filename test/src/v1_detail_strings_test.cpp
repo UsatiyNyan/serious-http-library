@@ -175,41 +175,42 @@ TEST(v1DetailStrings, tryFindLimited) {
 TEST(v1DetailStrings, tryFindSplit) {
     {
         const auto result = try_find_split_unlimited("", ", ");
-        ASSERT_FALSE(result.has_value());
+        ASSERT_FALSE(result.tail.has_value());
+        EXPECT_EQ(result.head, "");
     }
 
     {
         const auto result = try_find_split_unlimited("nonempty", ", ");
-        ASSERT_TRUE(result.has_value());
-        const auto [found, remainder] = result.value();
-        EXPECT_EQ(found, "nonempty");
+        ASSERT_FALSE(result.tail.has_value());
+        EXPECT_EQ(result.head, "nonempty");
     }
 
     const std::string_view series_str = "aaa, bbb, ccc, dddd";
 
     {
         const auto result = try_find_split_unlimited(series_str, ",");
-        ASSERT_TRUE(result.has_value());
-        const auto [found, remainder] = result.value();
-        EXPECT_EQ(found, "aaa");
-        EXPECT_EQ(remainder, " bbb, ccc, dddd");
+        ASSERT_TRUE(result.tail.has_value());
+        EXPECT_EQ(result.head, "aaa");
+        EXPECT_EQ(result.tail.value(), " bbb, ccc, dddd");
     }
 
     {
         const auto result = try_find_split_unlimited(series_str, ", ");
-        ASSERT_TRUE(result.has_value());
-        const auto [found, remainder] = result.value();
-        EXPECT_EQ(found, "aaa");
-        EXPECT_EQ(remainder, "bbb, ccc, dddd");
+        ASSERT_TRUE(result.tail.has_value());
+        EXPECT_EQ(result.head, "aaa");
+        EXPECT_EQ(result.tail.value(), "bbb, ccc, dddd");
     }
 
     {
         std::string_view series_state = series_str;
         std::vector<std::string_view> series_values;
-        while (const auto maybe_next = try_find_split_unlimited(series_state, ", ")) {
-            const auto [next, remainder] = maybe_next.value();
-            series_values.push_back(next);
-            series_state = remainder;
+        while (true) {
+            const auto result = try_find_split_unlimited(series_state, ", ");
+            series_values.push_back(result.head);
+            if (!result.tail.has_value()) {
+                break;
+            }
+            series_state = result.tail.value();
         }
         const std::vector<std::string_view> expected_series_values{
             "aaa",

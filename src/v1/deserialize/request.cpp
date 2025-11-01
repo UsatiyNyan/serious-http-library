@@ -285,12 +285,16 @@ meta::result<request_state, status_type>
 
     const bool is_chunked = maybe_transfer_encodings
                                 .map([](std::string_view transfer_encodings) {
-                                    while (const auto maybe_next = try_find_split_unlimited(transfer_encodings, ", ")) {
-                                        const auto [transfer_encoding, remainder] = maybe_next.value();
-                                        if (transfer_encoding == "chunked") {
+                                    constexpr std::string_view needle = "chunked";
+                                    while (transfer_encodings.size() >= needle.size()) {
+                                        const auto result = try_find_split_unlimited(transfer_encodings, ", ");
+                                        if (result.head == needle) {
                                             return true;
                                         }
-                                        transfer_encodings = remainder;
+                                        if (!result.tail.has_value()) {
+                                            break;
+                                        }
+                                        transfer_encodings = result.tail.value();
                                     }
                                     return false;
                                 })
@@ -302,7 +306,7 @@ meta::result<request_state, status_type>
             return meta::err(status_type::BAD_REQUEST);
         }
 
-        return request_state_chunked_body{};
+        return request_state_chunked_body{ detail::request_state_chunked_body_empty{} };
     }
 
     const auto maybe_content_length =

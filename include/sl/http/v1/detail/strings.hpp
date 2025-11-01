@@ -51,23 +51,22 @@ struct find_ok {
     std::size_t offset;
 };
 
-struct find_split_ok {
-    std::string_view head;
-    std::string_view tail;
-};
-
 // TODO: visited_bytes
 enum class find_err {
     NOT_FOUND,
     MAX_SIZE_EXCEEDED,
 };
 
+struct find_split_result {
+    std::string_view head;
+    meta::result<std::string_view, find_err> tail;
+};
+
 meta::result<find_ok, find_err> try_find_unlimited(std::string_view str_buffer, std::string_view delim);
 meta::result<find_ok, find_err> try_find(std::string_view str_buffer, std::string_view delim, std::size_t max_size);
 
-meta::result<find_split_ok, find_err> try_find_split_unlimited(std::string_view str_buffer, std::string_view delim);
-meta::result<find_split_ok, find_err>
-    try_find_split(std::string_view str_buffer, std::string_view delim, std::size_t max_size);
+find_split_result try_find_split_unlimited(std::string_view str_buffer, std::string_view delim);
+find_split_result try_find_split(std::string_view str_buffer, std::string_view delim, std::size_t max_size);
 
 template <typename EnumT>
 constexpr std::size_t enum_max_str_length() {
