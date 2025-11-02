@@ -26,7 +26,7 @@ using request_result = meta::result<request_message, status_type>;
 
 struct request_chunk {
     const request_message& message;
-    std::string_view chunk_ext;
+    std::string chunk_ext;
     std::span<const std::byte> chunk;
 };
 
@@ -47,21 +47,17 @@ struct request_state_body {
 };
 
 struct request_state_chunked_body_empty {};
-struct request_state_chunked_body_size {
+struct request_state_chunked_body_line {
+    std::string chunk_ext;
     std::uint32_t chunk_size = 0;
-};
-struct request_state_chunked_body_ext {
-    std::uint32_t chunk_size = 0;
-    std::string_view chunk_ext;
 };
 struct request_state_chunked_body_complete {
-    std::string_view chunk_ext;
+    std::string chunk_ext;
     std::span<const std::byte> chunk;
 };
-using request_state_chunked_body = std::variant<
+using request_state_chunked_body = std::variant< //
     request_state_chunked_body_empty,
-    request_state_chunked_body_size,
-    request_state_chunked_body_ext,
+    request_state_chunked_body_line,
     request_state_chunked_body_complete>;
 
 struct request_state_trailing_fields {

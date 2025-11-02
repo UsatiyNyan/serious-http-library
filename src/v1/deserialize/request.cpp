@@ -45,7 +45,7 @@ exec::async_gen<request_chunk, io_result<request_result>>
                 add_offset(offset);
             } else {
                 const auto [new_chunked_state_or_err, offset] =
-                    detail::parse_request_chunk(output, *chunked_state, get_buffer());
+                    detail::parse_request_chunk(output, std::move(*chunked_state), get_buffer());
 
                 if (!new_chunked_state_or_err.has_value()) {
                     co_return meta::err(new_chunked_state_or_err.error());
@@ -58,7 +58,7 @@ exec::async_gen<request_chunk, io_result<request_result>>
 
                     co_yield request_chunk{
                         .message = output,
-                        .chunk_ext = a_chunked_complete_state->chunk_ext,
+                        .chunk_ext = std::move(a_chunked_complete_state->chunk_ext),
                         .chunk = a_chunked_complete_state->chunk,
                     };
 
@@ -369,102 +369,71 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
     parse_request_chunk(request_message& output, request_state_chunked_body state, std::span<const std::byte> buffer) {
     return std::visit(
         meta::overloaded{
-            [&](const request_state_chunked_body_empty&) {
-                constexpr auto finalize = [](find_ok ok) -> meta::maybe<std::uint32_t> {
+            [&buffer](request_state_chunked_body_empty a_state) {
+                constexpr std::size_t max_chunk_size_size = 8;
+                constexpr auto max_chunk_line_size = max_chunk_size_size + 8 * 1024; // 8B + 8KiB
+
+                const auto chunk_line_result = try_find(buffer_byte_to_str(buffer), tokens::CRLF, max_chunk_line_size);
+                if (!chunk_line_result.has_value()) {
+                    const auto chunk_line_err = chunk_line_result.error();
+                    if (chunk_line_err == find_err::MAX_SIZE_EXCEEDED) {
+                        return make_parse_chunk_stop(status_type::BAD_REQUEST);
+                    }
+                    DEBUG_ASSERT(chunk_line_err == find_err::NOT_FOUND);
+                    return make_parse_chunk_stop(std::move(a_state));
+                }
+                const auto& chunk_line_ok = chunk_line_result.value();
+
+                const auto split_result = try_find_split_unlimited(chunk_line_ok.value, ";");
+
+                const auto chunk_size_str = strip_suffix_while(split_result.head, tokens::is_ws); // BWS
+                if (chunk_size_str.size() > max_chunk_size_size) {
+                    return make_parse_chunk_stop(status_type::BAD_REQUEST);
+                }
+                const auto maybe_chunk_size = [chunk_size_str]() -> meta::maybe<std::uint32_t> {
                     std::uint32_t chunk_size = 0;
-                    const auto conv_result = std::from_chars(ok.value.begin(), ok.value.end(), chunk_size, 16);
-                    if (conv_result.ec != std::error_code{} || conv_result.ptr != ok.value.end()) {
+                    const auto conv_result =
+                        std::from_chars(chunk_size_str.begin(), chunk_size_str.end(), chunk_size, 16);
+                    if (conv_result.ec != std::error_code{} || conv_result.ptr != chunk_size_str.end()) {
                         return meta::null;
                     }
                     return chunk_size;
-                };
-
-                constexpr std::size_t max_chunk_size_size = 8;
-
-                // +1 accounting for BWS
-                if (const auto ext_result = try_find_unlimited(buffer_byte_to_str(buffer), ";");
-                    ext_result.has_value()) {
-                    auto ext_ok = ext_result.value();
-
-                    // BWS
-                    ext_ok.value = strip_suffix_while(ext_ok.value, tokens::is_ws);
-                    if (ext_ok.value.size() > max_chunk_size_size) {
-                        return make_parse_chunk_stop(status_type::BAD_REQUEST);
-                    }
-
-                    const auto maybe_chunk_size = finalize(ext_ok);
-                    if (!maybe_chunk_size.has_value()) {
-                        return make_parse_chunk_stop(status_type::BAD_REQUEST);
-                    }
-
-                    return make_parse_chunk_more(
-                        request_state_chunked_body_size{ .chunk_size = maybe_chunk_size.value() }, ext_ok.offset
-                    );
-                }
-
-                const auto crlf_result = try_find(buffer_byte_to_str(buffer), tokens::CRLF, max_chunk_size_size);
-                if (!crlf_result.has_value()) {
-                    const auto crlf_err = crlf_result.error();
-                    if (crlf_err == find_err::MAX_SIZE_EXCEEDED) {
-                        return make_parse_chunk_stop(status_type::BAD_REQUEST);
-                    }
-                    DEBUG_ASSERT(crlf_err == find_err::NOT_FOUND);
-                    return make_parse_chunk_stop(state);
-                }
-                const auto& crlf_ok = crlf_result.value();
-
-                const auto maybe_chunk_size = finalize(crlf_ok);
+                }();
                 if (!maybe_chunk_size.has_value()) {
                     return make_parse_chunk_stop(status_type::BAD_REQUEST);
                 }
                 const std::uint32_t chunk_size = maybe_chunk_size.value();
 
+                const auto chunk_ext =
+                    split_result //
+                        .tail
+                        .map([](std::string_view x) { return strip_prefix_while(x, tokens::is_ws); }) // BWS
+                        .value_or(std::string_view{});
+
                 if (chunk_size == 0) { // last-chunk
-                    return make_parse_chunk_more(request_state_chunked_body_complete{}, crlf_ok.offset);
-                }
-                return make_parse_chunk_more(
-                    request_state_chunked_body_ext{ .chunk_size = chunk_size }, crlf_ok.offset
-                );
-            },
-
-            [&](const request_state_chunked_body_size& a_state) {
-                constexpr auto max_chunk_ext_size = 8 * 1024; // 8KiB
-                const auto chunk_ext_result = try_find(buffer_byte_to_str(buffer), tokens::CRLF, max_chunk_ext_size);
-                if (!chunk_ext_result.has_value()) {
-                    const auto chunk_ext_err = chunk_ext_result.error();
-                    if (chunk_ext_err == find_err::MAX_SIZE_EXCEEDED) {
-                        return make_parse_chunk_stop(status_type::BAD_REQUEST);
-                    }
-                    DEBUG_ASSERT(chunk_ext_err == find_err::NOT_FOUND);
-                    return make_parse_chunk_stop(state);
-                }
-                const auto chunk_ext_ok = chunk_ext_result.value();
-                const auto chunk_ext = strip_prefix_while(chunk_ext_ok.value, tokens::is_ws);
-
-                if (a_state.chunk_size == 0) { // last-chunk
                     return make_parse_chunk_more(
                         request_state_chunked_body_complete{
-                            .chunk_ext = chunk_ext,
+                            .chunk_ext{ chunk_ext },
                             .chunk{},
                         },
-                        chunk_ext_ok.offset
+                        chunk_line_ok.offset
                     );
                 }
 
                 return make_parse_chunk_more(
-                    request_state_chunked_body_ext{
-                        .chunk_size = a_state.chunk_size,
-                        .chunk_ext = chunk_ext,
+                    request_state_chunked_body_line{
+                        .chunk_ext{ chunk_ext },
+                        .chunk_size = chunk_size,
                     },
-                    chunk_ext_ok.offset
+                    chunk_line_ok.offset
                 );
             },
 
-            [&](const request_state_chunked_body_ext& a_state) {
+            [&buffer](request_state_chunked_body_line a_state) {
                 const std::uint32_t chunk_size = a_state.chunk_size;
                 const std::size_t offset = chunk_size + tokens::CRLF.size();
                 if (buffer.size() < offset) {
-                    return make_parse_chunk_stop(state);
+                    return make_parse_chunk_stop(std::move(a_state));
                 }
 
                 if (const std::string_view crlf_expected =
@@ -475,7 +444,7 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
 
                 return make_parse_chunk_more(
                     request_state_chunked_body_complete{
-                        .chunk_ext = a_state.chunk_ext,
+                        .chunk_ext = std::move(a_state.chunk_ext),
                         .chunk = buffer.subspan(0, chunk_size),
                     },
                     offset
@@ -483,9 +452,9 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
             },
 
             // shouldn't enter this branch
-            [&](const request_state_chunked_body_complete&) { return make_parse_chunk_stop(state); },
+            [](request_state_chunked_body_complete a_state) { return make_parse_chunk_stop(std::move(a_state)); },
         },
-        state
+        std::move(state)
     );
 }
 
