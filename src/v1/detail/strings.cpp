@@ -4,7 +4,7 @@
 
 #include "sl/http/v1/detail/strings.hpp"
 
-#include <libassert/assert.hpp>
+#include <sl/meta/assert.hpp>
 
 #include <bit>
 

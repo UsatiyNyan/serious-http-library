@@ -5,83 +5,99 @@
 #include "sl/http.hpp"
 
 #include <sl/exec.hpp>
-#include <sl/exec/algo/sched/inline.hpp>
 #include <sl/exec/algo/sched/manual.hpp>
 #include <sl/exec/coro/async.hpp>
 #include <sl/exec/thread/pool/monolithic.hpp>
 #include <sl/io.hpp>
 
-#include <libassert/assert.hpp>
+#include <sl/io/async/socket.hpp>
+#include <sl/meta/assert.hpp>
 
 namespace sl {
 
-http::v1::response_type handle(meta::maybe<http::v1::request_type> http_request) { PANIC("TODO"); }
+exec::async_gen<std::span<const std::byte>, std::error_code>
+    read_agen(sl::io::async::socket::bound& client, exec::executor& executor) {
+    using exec::operator co_await;
+    using exec::operator|;
+
+    while (true) {
+        std::array<std::byte, 1024> buffer{};
+        const auto read_result = co_await (client.read(buffer) | exec::continue_on(executor));
+        if (!read_result.has_value()) {
+            co_return read_result.error();
+        }
+        co_yield std::span{ buffer.data(), *read_result };
+    }
+    co_return std::error_code{};
+}
+
+exec::async<void> client_coro(
+    std::pair<io::sys::socket, io::sys::address> accepted,
+    io::sys::epoll& epoll,
+    exec::executor& executor
+) {
+    using exec::operator co_await;
+    using exec::operator|;
+
+    auto& [socket, address] = accepted;
+    io::state::socket socket_state{ socket };
+    auto socket_async = *io::async::socket::create(socket_state);
+    auto bound_socket_async = *socket_async->bind(epoll);
+    meta::defer unbind_socket{ [&bound_socket_async] { ASSERT(std::move(bound_socket_async).unbind()); } };
+    auto& client = bound_socket_async;
+
+    while (true) {
+        auto request_agen = http::v1::deserialize::request(read_agen(client, executor));
+        while (auto request_chunk = co_await request_agen) {
+            // TODO: handle chunks
+        }
+        auto io_result = std::move(request_agen).result_or_throw();
+        if (!io_result.has_value()) {
+            PANIC("io:", io_result.error().message());
+        }
+        auto request_result = std::move(io_result).value();
+        if (!request_result.has_value()) {
+            PANIC("status:", static_cast<std::uint16_t>(request_result.error()));
+        }
+        auto request = std::move(request_result).value();
+        // TODO: handle
+    }
+}
+
+exec::async<void> serve_coro(io::async::server::bound server, io::sys::epoll& epoll, exec::executor& executor) {
+    using exec::operator co_await;
+
+    meta::defer unbind_server{ [&server] { ASSERT(std::move(server).unbind()); } };
+
+    while (auto accept_result = co_await server.accept()) {
+        exec::coro_schedule(executor, client_coro(std::move(accept_result).value(), epoll, executor));
+    }
+}
 
 void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount) {
-    auto epoll = *ASSERT_VAL(io::epoll::create());
-    io::socket socket = *ASSERT_VAL(io::socket::create(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0));
+    auto socket = *ASSERT_VAL(io::sys::socket::create(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0));
     ASSERT(socket.set_opt(SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, 1));
-    io::socket::bound_server bound_server = *ASSERT_VAL(std::move(socket).bind(AF_INET, port, INADDR_ANY));
-    io::socket::server server = *ASSERT_VAL(std::move(bound_server).listen(max_clients));
-    io::async_epoll async_epoll{ epoll, server };
+    const auto address = io::sys::make_ipv4_address(AF_INET, port, INADDR_ANY);
+    auto bound_server = *ASSERT_VAL(std::move(socket).bind(address));
+    auto server = *ASSERT_VAL(std::move(bound_server).listen(max_clients));
 
-    auto client_handle_coro = [](io::async_connection::view conn, exec::executor& executor) -> exec::async<void> {
-        using exec::operator co_await;
-        using exec::operator|;
+    io::state::server server_state{ server };
+    auto server_async = *ASSERT_VAL(io::async::server::create(server_state));
 
-        std::array<std::byte, 1024> read_buffer{};
-        while (true) {
-            std::vector<std::byte> request_buffer;
-            {
-                while (true) {
-                    const auto read_result = co_await (conn.read(read_buffer) | exec::continue_on(executor));
-                    if (!read_result.has_value() || read_result.value() == 0) {
-                        break;
-                    }
-                    const std::span request_chunk{ read_buffer.data(), read_result.value() };
-                    request_buffer.insert(request_buffer.end(), request_chunk.begin(), request_chunk.end());
-                }
-            }
+    auto epoll = *ASSERT_VAL(io::sys::epoll::create());
+    auto bound_server_async = *ASSERT_VAL(server_async->bind(epoll));
 
-            const meta::maybe<http::v1::request_type> maybe_http_request =
-                http::v1::parse(std::span<const std::byte>{ request_buffer });
+    std::unique_ptr<exec::executor> executor_holder;
+    if (tcount > 0) {
+        executor_holder =
+            std::make_unique<exec::monolithic_thread_pool<>>(exec::thread_pool_config::with_hw_limit(tcount));
+    }
+    exec::executor& executor = executor_holder ? *executor_holder : exec::inline_executor();
 
-            const http::v1::response_type http_response = handle(maybe_http_request);
-
-            const std::vector<std::byte> response_buffer = http::v1::serialize(http_response);
-
-            {
-                std::span<const std::byte> write_buffer{ response_buffer };
-                while (!write_buffer.empty()) {
-                    const auto write_result = co_await (conn.write(write_buffer) | exec::continue_on(executor));
-                    if (!write_result.has_value() || write_result.value() == 0) {
-                        break;
-                    }
-                    write_buffer = write_buffer.subspan(write_result.value());
-                }
-            }
-        }
-    };
-
-    auto server_coro = [&async_epoll, client_handle_coro](exec::executor& executor) -> exec::async<void> {
-        auto serve = async_epoll.serve_coro(/*check_running=*/[] { return true; });
-        while (auto maybe_connection = co_await serve) {
-            auto& connection = maybe_connection.value();
-            exec::coro_schedule(executor, client_handle_coro(connection, executor));
-        }
-        const auto ec = std::move(serve).result_or_throw();
-        ASSERT(!ec);
-    };
-
-    const std::unique_ptr<exec::executor> executor =
-        tcount == 0 ? std::unique_ptr<exec::executor>(new exec::detail::inline_executor)
-                    : std::unique_ptr<exec::executor>(new exec::monolithic_thread_pool{
-                          exec::thread_pool_config::with_hw_limit(tcount) });
-
-    exec::coro_schedule(exec::inline_executor(), server_coro(*executor));
+    exec::coro_schedule(executor, serve_coro(std::move(bound_server_async), epoll, executor));
 
     std::array<::epoll_event, 1024> events{};
-    while (async_epoll.wait_and_fulfill(events, tl::nullopt)) {}
+    while (epoll.wait_and_fulfill(events, meta::null)) {}
 }
 
 } // namespace sl

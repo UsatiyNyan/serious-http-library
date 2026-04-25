@@ -11,7 +11,7 @@ FetchContent_MakeAvailable(serious-cmake-library)
 # Project
 
 sl_project_prologue(
-        CXX_STANDARD 20
+        CXX_STANDARD 23
         C_STANDARD 17)
 
 project(

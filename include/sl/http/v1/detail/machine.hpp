@@ -7,7 +7,7 @@
 #include <sl/meta/match/pmatch.hpp>
 #include <sl/meta/traits/is_specialization.hpp>
 
-#include <libassert/assert.hpp>
+#include <sl/meta/assert.hpp>
 
 #include <cstddef>
 #include <span>
