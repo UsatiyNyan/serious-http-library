@@ -279,10 +279,12 @@ parse_result<meta::result<request_state, status_type>> parse_request_part(
     };
     const auto field_value = strip(field_line.substr(field_offset));
 
-    const auto [field_kv_it, field_kv_is_emplaced] = output.fields.try_emplace(std::string{ field_key }, field_value);
-    std::ignore = field_kv_it;
+    const auto field_key_lower = to_lowercase(field_key);
+    const auto [field_kv_it, field_kv_is_emplaced] =
+        output.fields.try_emplace(field_key_lower, std::string{ field_value });
     if (!field_kv_is_emplaced) {
-        return make_parse_stop(status_type::BAD_REQUEST);
+        field_kv_it.value() += ", ";
+        field_kv_it.value() += field_value;
     }
 
     return std::visit(
@@ -296,16 +298,17 @@ parse_result<meta::result<request_state, status_type>> parse_request_part(
 
 meta::result<request_state, status_type>
     parse_fields_finalize(request_message& output, std::size_t fields_consumed_bytes) {
-    const auto find_field = [&fields = output.fields](auto k) -> meta::maybe<std::string_view> {
-        auto it = fields.find(k); // can avoid string creation
+    const auto find_field = [&fields = output.fields](std::string_view k) -> meta::maybe<std::string_view> {
+        DEBUG_ASSERT(is_lowercase(k));
+        auto it = fields.find(k);
         if (it == fields.end()) {
             return meta::null;
         }
         return std::string_view{ it.value() };
     };
 
-    const auto maybe_transfer_encodings = find_field("Transfer-Encoding");
-    const auto maybe_content_length_str = find_field("Content-Length");
+    const auto maybe_transfer_encodings = find_field("transfer-encoding");
+    const auto maybe_content_length_str = find_field("content-length");
 
     const bool is_chunked = maybe_transfer_encodings
                                 .map([](std::string_view transfer_encodings) {

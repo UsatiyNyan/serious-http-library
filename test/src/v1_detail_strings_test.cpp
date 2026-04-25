@@ -222,4 +222,30 @@ TEST(v1DetailStrings, tryFindSplit) {
     }
 }
 
+TEST(v1DetailStrings, toLowercase) {
+    EXPECT_EQ(to_lowercase(""), "");
+    EXPECT_EQ(to_lowercase("abc"), "abc");
+    EXPECT_EQ(to_lowercase("ABC"), "abc");
+    EXPECT_EQ(to_lowercase("AbC"), "abc");
+    EXPECT_EQ(to_lowercase("Host"), "host");
+    EXPECT_EQ(to_lowercase("Content-Type"), "content-type");
+    EXPECT_EQ(to_lowercase("X-Custom-Header"), "x-custom-header");
+    EXPECT_EQ(to_lowercase("123"), "123");
+    EXPECT_EQ(to_lowercase("ABC123def"), "abc123def");
+}
+
+TEST(v1DetailStrings, isLowercase) {
+    EXPECT_TRUE(is_lowercase(""));
+    EXPECT_TRUE(is_lowercase("abc"));
+    EXPECT_TRUE(is_lowercase("host"));
+    EXPECT_TRUE(is_lowercase("content-type"));
+    EXPECT_TRUE(is_lowercase("123"));
+    EXPECT_TRUE(is_lowercase("abc123"));
+    EXPECT_TRUE(is_lowercase("-_"));
+    EXPECT_FALSE(is_lowercase("ABC"));
+    EXPECT_FALSE(is_lowercase("Host"));
+    EXPECT_FALSE(is_lowercase("Content-Type"));
+    EXPECT_FALSE(is_lowercase("abcD"));
+}
+
 } // namespace sl::http::v1::deserialize::detail

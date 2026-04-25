@@ -6,9 +6,29 @@
 
 #include <sl/meta/assert.hpp>
 
+#include <algorithm>
 #include <bit>
+#include <cctype>
 
 namespace sl::http::v1::deserialize::detail {
+
+std::string to_lowercase(std::string_view str) {
+    std::string result;
+    result.reserve(str.size());
+    std::transform(str.begin(), str.end(), std::back_inserter(result), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return result;
+}
+
+bool is_lowercase(std::string_view str) {
+    for (unsigned char c : str) {
+        if (std::isalpha(c) && !std::islower(c)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 std::string_view buffer_byte_to_str(std::span<const std::byte> byte_buffer) {
     const auto char_buffer = std::bit_cast<std::span<const char>>(byte_buffer);

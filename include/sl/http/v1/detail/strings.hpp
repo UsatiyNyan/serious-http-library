@@ -9,9 +9,13 @@
 #include <sl/meta/monad/result.hpp>
 
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace sl::http::v1::deserialize::detail {
+
+std::string to_lowercase(std::string_view str);
+bool is_lowercase(std::string_view str);
 
 namespace tokens {
 

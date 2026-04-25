@@ -145,8 +145,8 @@ TEST_F(DeserializeRequestTest, ValidInputWithHeaders) {
     EXPECT_EQ(result->method, method_type::GET);
     EXPECT_EQ(result->target, "/resource");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
-    EXPECT_EQ(result->fields["Host"], "example.com");
-    EXPECT_EQ(result->fields["User-Agent"], "Test");
+    EXPECT_EQ(result->fields["host"], "example.com");
+    EXPECT_EQ(result->fields["user-agent"], "Test");
 }
 
 TEST_F(DeserializeRequestTest, ValidInputWithChunkedBody) {
@@ -209,9 +209,9 @@ TEST_F(DeserializeRequestTest, ValidInputWithMultipleHeaders) {
     EXPECT_EQ(result->method, method_type::GET);
     EXPECT_EQ(result->target, "/multi");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
-    EXPECT_EQ(result->fields["Host"], "example.com");
-    EXPECT_EQ(result->fields["User-Agent"], "Test");
-    EXPECT_EQ(result->fields["Accept"], "*/*");
+    EXPECT_EQ(result->fields["host"], "example.com");
+    EXPECT_EQ(result->fields["user-agent"], "Test");
+    EXPECT_EQ(result->fields["accept"], "*/*");
 }
 
 TEST_F(DeserializeRequestTest, ValidInputWithNoBody) {
@@ -248,8 +248,8 @@ TEST_F(DeserializeRequestTest, ValidInputWithTrailingFields) {
     EXPECT_EQ(result->method, method_type::POST);
     EXPECT_EQ(result->target, "/submit");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
-    EXPECT_EQ(result->fields["Host"], "example.com");
-    EXPECT_EQ(result->fields["Trailer-Header"], "value");
+    EXPECT_EQ(result->fields["host"], "example.com");
+    EXPECT_EQ(result->fields["trailer-header"], "value");
 }
 
 TEST_F(DeserializeRequestTest, OneByOneInputWithTrailingFields) {
@@ -263,8 +263,8 @@ TEST_F(DeserializeRequestTest, OneByOneInputWithTrailingFields) {
     EXPECT_EQ(result->method, method_type::POST);
     EXPECT_EQ(result->target, "/submit");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
-    EXPECT_EQ(result->fields["Host"], "example.com");
-    EXPECT_EQ(result->fields["Trailer-Header"], "value");
+    EXPECT_EQ(result->fields["host"], "example.com");
+    EXPECT_EQ(result->fields["trailer-header"], "value");
 }
 
 TEST_F(DeserializeRequestTest, ValidInputWithChunkExtensions) {
@@ -305,6 +305,30 @@ TEST_F(DeserializeRequestTest, OneByOneInputWithChunkExtensions) {
     EXPECT_TRUE(result->body.empty());
     EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
     EXPECT_EQ(chunk_ext_buffer.front(), "ext=value");
+}
+
+TEST_F(DeserializeRequestTest, CaseInsensitiveHeaders) {
+    auto result = drain(request(full("GET / HTTP/1.1\r\nHOST: example.com\r\nUser-Agent: Test\r\naccept: */*\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->fields["host"], "example.com");
+    EXPECT_EQ(result->fields["user-agent"], "Test");
+    EXPECT_EQ(result->fields["accept"], "*/*");
+}
+
+TEST_F(DeserializeRequestTest, DuplicateHeadersCombined) {
+    auto result =
+        drain(request(full("GET / HTTP/1.1\r\nHost: example.com\r\nAccept: text/html\r\nAccept: application/json\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->fields["host"], "example.com");
+    EXPECT_EQ(result->fields["accept"], "text/html, application/json");
+}
+
+TEST_F(DeserializeRequestTest, DuplicateHeadersCombinedCaseInsensitive) {
+    auto result =
+        drain(request(full("GET / HTTP/1.1\r\nHost: example.com\r\nACCEPT: text/html\r\naccept: application/json\r\nAccept: text/plain\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->fields["host"], "example.com");
+    EXPECT_EQ(result->fields["accept"], "text/html, application/json, text/plain");
 }
 
 } // namespace sl::http::v1::deserialize
