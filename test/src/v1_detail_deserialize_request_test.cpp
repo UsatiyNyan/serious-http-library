@@ -331,4 +331,25 @@ TEST_F(DeserializeRequestTest, DuplicateHeadersCombinedCaseInsensitive) {
     EXPECT_EQ(result->fields["accept"], "text/html, application/json, text/plain");
 }
 
+TEST_F(DeserializeRequestTest, ContentLengthExceedsMaxBodySize) {
+    // Use small max_body_size to test DoS protection
+    request_config config{ .max_body_size = 10 };
+    auto result = drain(request(
+        full("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 100\r\n\r\n"),
+        config
+    ));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), drain_error(status_type::CONTENT_TOO_LARGE));
+}
+
+TEST_F(DeserializeRequestTest, ContentLengthWithinMaxBodySize) {
+    request_config config{ .max_body_size = 100 };
+    auto result = drain(request(
+        full("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\nHello, World!"),
+        config
+    ));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->body, detail::buffer_str_to_byte("Hello, World!"));
+}
+
 } // namespace sl::http::v1::deserialize

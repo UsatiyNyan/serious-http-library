@@ -24,6 +24,10 @@ using io_result = meta::result<T, std::error_code>;
 
 using request_result = meta::result<request_message, status_type>;
 
+struct request_config {
+    std::size_t max_body_size = 1 * 1024 * 1024; // 1 MiB default
+};
+
 struct request_chunk {
     const request_message& message;
     std::string chunk_ext;
@@ -31,7 +35,7 @@ struct request_chunk {
 };
 
 exec::async_gen<request_chunk, io_result<request_result>>
-    request(exec::async_gen<std::span<const std::byte>, std::error_code> input);
+    request(exec::async_gen<std::span<const std::byte>, std::error_code> input, request_config config = {});
 
 namespace detail {
 
@@ -89,7 +93,7 @@ inline parse_result<meta::result<request_state, status_type>> make_parse_more(re
 }
 
 parse_result<meta::result<request_state, status_type>>
-    parse_request(request_message& output, request_state state, std::span<const std::byte> byte_buffer);
+    parse_request(request_message& output, request_state state, std::span<const std::byte> byte_buffer, std::size_t max_body_size);
 
 parse_result<meta::result<request_state, status_type>>
     parse_request_part(request_message& output, request_state_empty state, std::string_view buffer);
@@ -103,10 +107,11 @@ parse_result<meta::result<request_state, status_type>>
 parse_result<meta::result<request_state, status_type>> parse_request_part(
     request_message& output,
     std::variant<request_state_fields, request_state_trailing_fields> state,
-    std::string_view buffer
+    std::string_view buffer,
+    std::size_t max_body_size
 );
 meta::result<request_state, status_type>
-    parse_fields_finalize(request_message& output, std::size_t fields_consumed_bytes);
+    parse_fields_finalize(request_message& output, std::size_t fields_consumed_bytes, std::size_t max_body_size);
 
 parse_result<meta::result<request_state, status_type>>
     parse_request_part(request_message& output, request_state_body state, std::span<const std::byte> buffer);
