@@ -181,6 +181,41 @@ TEST_F(DeserializeRequestTest, ValidInputOneByOneWithChunkedBody) {
     EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
 }
 
+TEST_F(DeserializeRequestTest, TransferEncodingNoSpaceAfterComma) {
+    // RFC 7230: Transfer-Encoding can have optional whitespace around commas
+    // "gzip,chunked" (no space) must work same as "gzip, chunked"
+    std::vector<std::byte> chunks_buffer;
+    auto result = drain(
+        request(full(
+            "POST /upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: gzip,chunked\r\n\r\n5\r\nHello\r\n0\r\n\r\n"
+        )),
+        &chunks_buffer
+    );
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->method, method_type::POST);
+    EXPECT_EQ(result->target, "/upload");
+    EXPECT_EQ(result->version, version_type::HTTPv1_1);
+    EXPECT_TRUE(result->body.empty());
+    EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
+}
+
+TEST_F(DeserializeRequestTest, TransferEncodingExtraWhitespace) {
+    // RFC 7230: Transfer-Encoding can have extra whitespace around commas
+    std::vector<std::byte> chunks_buffer;
+    auto result = drain(
+        request(full(
+            "POST /upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding:  gzip ,  chunked \r\n\r\n5\r\nHello\r\n0\r\n\r\n"
+        )),
+        &chunks_buffer
+    );
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->method, method_type::POST);
+    EXPECT_EQ(result->target, "/upload");
+    EXPECT_EQ(result->version, version_type::HTTPv1_1);
+    EXPECT_TRUE(result->body.empty());
+    EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
+}
+
 TEST_F(DeserializeRequestTest, InvalidInputWithMissingHeaders) {
     // NOT HANDLED FOR NOW
     auto result = drain(request(full("GET / HTTP/1.1\r\n\r\n")));
@@ -350,6 +385,99 @@ TEST_F(DeserializeRequestTest, ContentLengthWithinMaxBodySize) {
     ));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->body, detail::buffer_str_to_byte("Hello, World!"));
+}
+
+TEST_F(DeserializeRequestTest, PipelinedRequestsWithTrailingFields) {
+    // Test: pipelined requests where first has trailing fields.
+    // Single generator yields bytes one-by-one, shared position tracks consumption.
+    //
+    // Note: offset bug in detail::parse_request (returning 0 instead of 2 for
+    // trailing fields CRLF) doesn't manifest here because each request() owns
+    // its remainder_buffer. Generator position tracks actual pulled bytes, which
+    // is correct. Bug only affects internal remainder_buffer offset accounting.
+    // See TrailingFieldsCRLFOffset test for direct verification of the fix.
+
+    const std::string req1 =
+        "POST /submit HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n"
+        "5\r\nHello\r\n"
+        "0\r\n"
+        "Trailer-Header: value\r\n"
+        "\r\n";
+
+    const std::string req2 =
+        "GET /page HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "\r\n";
+
+    const std::string pipelined = req1 + req2;
+
+    std::vector<std::byte> input_bytes(
+        detail::buffer_str_to_byte(pipelined).begin(),
+        detail::buffer_str_to_byte(pipelined).end()
+    );
+
+    // Shared position - tracks actual bytes consumed
+    std::size_t pos = 0;
+
+    // Generator factory - each call creates new generator reading from current pos
+    auto make_gen = [&]() -> exec::async_gen<std::span<const std::byte>, std::error_code> {
+        while (pos < input_bytes.size()) {
+            std::array<std::byte, 1> buf{ input_bytes[pos++] };
+            co_yield buf;
+        }
+        co_return std::error_code{};
+    };
+
+    // Parse request 1
+    std::vector<std::byte> chunks1;
+    auto result1 = drain(request(make_gen()), &chunks1);
+    ASSERT_TRUE(result1.has_value()) << "Request 1 should parse";
+    EXPECT_EQ(result1->method, method_type::POST);
+    EXPECT_EQ(result1->target, "/submit");
+    EXPECT_EQ(result1->fields["trailer-header"], "value");
+    EXPECT_EQ(chunks1, detail::buffer_str_to_byte("Hello"));
+
+    // Check position after req1 - should be exactly req1.size()
+    EXPECT_EQ(pos, req1.size()) << "Position after req1 should match req1 size";
+
+    // Parse request 2
+    auto result2 = drain(request(make_gen()));
+    ASSERT_TRUE(result2.has_value()) << "Request 2 should parse";
+    EXPECT_EQ(result2->method, method_type::GET);
+    EXPECT_EQ(result2->target, "/page");
+
+    // All bytes consumed
+    EXPECT_EQ(pos, pipelined.size()) << "All bytes should be consumed";
+}
+
+TEST_F(DeserializeRequestTest, TrailingFieldsCRLFOffset) {
+    // Direct test of detail::parse_request offset when trailing fields end.
+    // When empty field line (CRLF) detected in trailing_fields state,
+    // returned offset must be 2 to consume the CRLF bytes.
+    //
+    // Fix: use make_parse_more(request_state_complete{}, field_line_offset)
+    // instead of make_parse_stop which returns offset=0.
+
+    request_message output;
+    const request_config config;
+
+    // State after "0\r\n" chunk and "Trailer: val\r\n" parsed
+    detail::request_state state = detail::request_state_trailing_fields{};
+
+    // Empty field line = just CRLF = end of trailing fields
+    const std::string_view input = "\r\nGET / HTTP/1.1\r\n"; // CRLF + next request
+    const auto buffer = detail::buffer_str_to_byte(input);
+
+    const auto [result, offset] = detail::parse_request(output, state, buffer, config);
+
+    ASSERT_TRUE(result.has_value()) << "Should parse successfully";
+    EXPECT_TRUE(std::holds_alternative<detail::request_state_complete>(result.value()))
+        << "Should transition to complete state";
+
+    // Offset must be 2 to consume CRLF, otherwise pipelining breaks
+    EXPECT_EQ(offset, 2u) << "Must consume CRLF (2 bytes) for correct pipelining";
 }
 
 } // namespace sl::http::v1::deserialize

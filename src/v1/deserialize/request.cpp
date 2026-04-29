@@ -270,7 +270,7 @@ parse_result<meta::result<request_state, status_type>> parse_request_part(
                         parse_fields_finalize(output, a_state.consumed_bytes, config), field_line_offset
                     );
                 },
-                [](request_state_trailing_fields) { return make_parse_stop(request_state_complete{}); },
+                [&](request_state_trailing_fields) { return make_parse_more(request_state_complete{}, field_line_offset); },
             },
             state
         );
@@ -323,15 +323,19 @@ meta::result<request_state, status_type>
     const bool is_chunked = maybe_transfer_encodings
                                 .map([](std::string_view transfer_encodings) {
                                     constexpr std::string_view needle = "chunked";
+                                    const auto strip_ws = [](std::string_view s) {
+                                        return strip_suffix_while(strip_prefix_while(s, tokens::is_ws), tokens::is_ws);
+                                    };
+                                    transfer_encodings = strip_ws(transfer_encodings);
                                     while (transfer_encodings.size() >= needle.size()) {
-                                        const auto result = try_find_split_unlimited(transfer_encodings, ", ");
-                                        if (result.head == needle) {
+                                        const auto result = try_find_split_unlimited(transfer_encodings, ",");
+                                        if (strip_ws(result.head) == needle) {
                                             return true;
                                         }
                                         if (!result.tail.has_value()) {
                                             break;
                                         }
-                                        transfer_encodings = result.tail.value();
+                                        transfer_encodings = strip_ws(result.tail.value());
                                     }
                                     return false;
                                 })
