@@ -15,7 +15,13 @@
 namespace sl::http::v1::deserialize::detail {
 
 inline bool span_eq(std::span<const std::byte> a, std::span<const std::byte> b) {
-    return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0;
+    if (a.size() != b.size()) {
+        return false;
+    }
+    if (a.empty()) {
+        return true;
+    }
+    return std::memcmp(a.data(), b.data(), a.size()) == 0;
 }
 
 struct logging_allocator_state {
