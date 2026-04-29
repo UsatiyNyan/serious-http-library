@@ -137,4 +137,88 @@ TEST_F(RemainderBuffer, mergeAddOffsetMerge) {
     EXPECT_LE(allocator_state.alloc_counter, (512 + 1024) * 2);
 }
 
+// Verify: fully consumed buffer doesn't accumulate on subsequent merges
+TEST_F(RemainderBuffer, mergeFullyConsumedNoGrowth) {
+    remainder_buffer rb{ allocator };
+
+    for (int i = 0; i < 100; ++i) {
+        const auto input = MakeInput<256>();
+        std::ignore = rb.merge(input);
+        EXPECT_TRUE(span_eq(rb.view(), input));
+        rb.add_offset(256); // fully consume
+        EXPECT_TRUE(rb.view().empty());
+    }
+
+    // Buffer replaced each time, not accumulated
+    // alloc_counter tracks total allocations, not current size
+    // Key: view is empty after each consume, so merge assigns (not appends)
+}
+
+// Verify: unconsumed data accumulates (documents unbounded growth potential)
+TEST_F(RemainderBuffer, mergeUnconsumedGrows) {
+    remainder_buffer rb{ allocator };
+
+    const auto chunk1 = MakeInput<256>();
+    const auto chunk2 = MakeInput<256>();
+    const auto chunk3 = MakeInput<256>();
+
+    std::ignore = rb.merge(chunk1);
+    EXPECT_EQ(rb.view().size(), 256);
+
+    // No consumption - merge appends
+    std::ignore = rb.merge(chunk2);
+    EXPECT_EQ(rb.view().size(), 512);
+
+    std::ignore = rb.merge(chunk3);
+    EXPECT_EQ(rb.view().size(), 768);
+
+    // Data preserved in order
+    EXPECT_TRUE(span_eq(rb.view().subspan(0, 256), chunk1));
+    EXPECT_TRUE(span_eq(rb.view().subspan(256, 256), chunk2));
+    EXPECT_TRUE(span_eq(rb.view().subspan(512, 256), chunk3));
+}
+
+// Verify: partial consumption + merge keeps unconsumed prefix
+TEST_F(RemainderBuffer, mergePartialConsumeKeepsRemainder) {
+    remainder_buffer rb{ allocator };
+
+    const auto chunk1 = MakeInput<256>();
+    const auto chunk2 = MakeInput<256>();
+
+    std::ignore = rb.merge(chunk1);
+    rb.add_offset(100); // consume 100, leave 156
+
+    const auto prev_offset = rb.merge(chunk2);
+    EXPECT_EQ(prev_offset, 100);
+    EXPECT_EQ(rb.view().size(), 156 + 256); // unconsumed + new
+
+    // First part is remainder from chunk1
+    EXPECT_TRUE(span_eq(rb.view().subspan(0, 156), std::span(chunk1).subspan(100)));
+    // Second part is chunk2
+    EXPECT_TRUE(span_eq(rb.view().subspan(156, 256), chunk2));
+}
+
+// Verify: repeated partial consumption pattern (simulates slow parsing)
+TEST_F(RemainderBuffer, repeatedPartialConsumption) {
+    remainder_buffer rb{ allocator };
+
+    // Simulate: receive 100 bytes, parse 50, receive 100, parse 50, ...
+    std::size_t total_received = 0;
+    std::size_t total_consumed = 0;
+
+    for (int i = 0; i < 10; ++i) {
+        const auto chunk = MakeInput<100>();
+        std::ignore = rb.merge(chunk);
+        total_received += 100;
+
+        rb.add_offset(50);
+        total_consumed += 50;
+
+        EXPECT_EQ(rb.view().size(), total_received - total_consumed);
+    }
+
+    // After 10 iterations: received 1000, consumed 500, remainder = 500
+    EXPECT_EQ(rb.view().size(), 500);
+}
+
 } // namespace sl::http::v1::deserialize::detail
