@@ -59,9 +59,9 @@ Reviewing HTTP/1.1 request deserializer. Several bugs/issues identified. Some fi
 
 **Note:** Generator not fully consumed on success. Assert removed. Write test verifying pipelining works (unconsumed bytes available for next request).
 
-### 5. Pass config via const& for max_field_size
+### 5. ~~Pass config via const& for max_field_size~~
 
-**Note:** Currently config passed by value. Use const& and apply to max_field_size too.
+**Done:** Config now passed as `const request_config&`. Added `max_field_size` to config (default 80 KiB). Threaded through `parse_request`, `parse_request_part`, `parse_fields_finalize`.
 
 ## Current Limits
 

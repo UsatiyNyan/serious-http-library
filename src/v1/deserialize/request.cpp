@@ -24,12 +24,11 @@
 namespace sl::http::v1::deserialize {
 
 exec::async_gen<request_chunk, io_result<request_result>>
-    request(exec::async_gen<std::span<const std::byte>, std::error_code> input, request_config config) {
+    request(exec::async_gen<std::span<const std::byte>, std::error_code> input, const request_config& config) {
 
     detail::request_state state;
     request_message output;
 
-    const std::size_t max_body_size = config.max_body_size;
     const auto do_parse = [&](
                               auto get_buffer, auto cond, auto add_offset
                           ) -> exec::async_gen<request_chunk, meta::result<meta::unit, status_type>> {
@@ -37,7 +36,7 @@ exec::async_gen<request_chunk, io_result<request_result>>
             auto* const chunked_state = std::get_if<detail::request_state_chunked_body>(&state);
             if (chunked_state == nullptr) {
                 const auto [new_state_or_err, offset] =
-                    detail::parse_request(output, state, get_buffer(), max_body_size);
+                    detail::parse_request(output, state, get_buffer(), config);
 
                 if (!new_state_or_err.has_value()) {
                     co_return meta::err(new_state_or_err.error());
@@ -142,7 +141,7 @@ parse_result<meta::result<request_state, status_type>> parse_request(
     request_message& output,
     request_state state,
     std::span<const std::byte> byte_buffer,
-    std::size_t max_body_size
+    const request_config& config
 ) {
     const auto str_buffer = buffer_byte_to_str(byte_buffer);
 
@@ -152,13 +151,13 @@ parse_result<meta::result<request_state, status_type>> parse_request(
             [](request_state_complete a_state) { return make_parse_stop(a_state); },
             [&](request_state_body a_state) { return parse_request_part(output, a_state, byte_buffer); },
             [&](request_state_version a_state) {
-                return parse_request_part(output, request_state_fields{}, str_buffer, max_body_size);
+                return parse_request_part(output, request_state_fields{}, str_buffer, config);
             },
             [&](request_state_fields a_state) {
-                return parse_request_part(output, a_state, str_buffer, max_body_size);
+                return parse_request_part(output, a_state, str_buffer, config);
             },
             [&](request_state_trailing_fields a_state) {
-                return parse_request_part(output, a_state, str_buffer, max_body_size);
+                return parse_request_part(output, a_state, str_buffer, config);
             },
             [&](auto a_state) { return parse_request_part(output, a_state, str_buffer); },
         },
@@ -249,12 +248,10 @@ parse_result<meta::result<request_state, status_type>> parse_request_part(
     request_message& output,
     std::variant<request_state_fields, request_state_trailing_fields> state,
     std::string_view buffer,
-    std::size_t max_body_size
+    const request_config& config
 ) {
-    constexpr std::size_t max_fields_size = 80 * 1024; // 80KiB
-
     const std::size_t consumed_bytes = std::visit([](const auto& a_state) { return a_state.consumed_bytes; }, state);
-    const auto field_line_result = try_find(buffer, tokens::CRLF, max_fields_size - consumed_bytes);
+    const auto field_line_result = try_find(buffer, tokens::CRLF, config.max_field_size - consumed_bytes);
     if (!field_line_result.has_value()) {
         const auto& field_line_err = field_line_result.error();
         if (field_line_err == find_err::MAX_SIZE_EXCEEDED) {
@@ -270,7 +267,7 @@ parse_result<meta::result<request_state, status_type>> parse_request_part(
             meta::overloaded{
                 [&](request_state_fields a_state) {
                     return parse_result<meta::result<request_state, status_type>>::more(
-                        parse_fields_finalize(output, a_state.consumed_bytes, max_body_size), field_line_offset
+                        parse_fields_finalize(output, a_state.consumed_bytes, config), field_line_offset
                     );
                 },
                 [](request_state_trailing_fields) { return make_parse_stop(request_state_complete{}); },
@@ -310,7 +307,7 @@ parse_result<meta::result<request_state, status_type>> parse_request_part(
 }
 
 meta::result<request_state, status_type>
-    parse_fields_finalize(request_message& output, std::size_t fields_consumed_bytes, std::size_t max_body_size) {
+    parse_fields_finalize(request_message& output, std::size_t fields_consumed_bytes, const request_config& config) {
     const auto find_field = [&fields = output.fields](std::string_view k) -> meta::maybe<std::string_view> {
         DEBUG_ASSERT(is_lowercase(k));
         auto it = fields.find(k);
@@ -365,7 +362,7 @@ meta::result<request_state, status_type>
         return request_state_complete{};
     }
 
-    if (content_length > max_body_size) {
+    if (content_length > config.max_body_size) {
         return meta::err(status_type::CONTENT_TOO_LARGE);
     }
 
