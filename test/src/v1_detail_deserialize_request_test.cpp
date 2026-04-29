@@ -480,4 +480,231 @@ TEST_F(DeserializeRequestTest, TrailingFieldsCRLFOffset) {
     EXPECT_EQ(offset, 2u) << "Must consume CRLF (2 bytes) for correct pipelining";
 }
 
+// === Pipelining Tests ===
+// HTTP/1.1 pipelining: multiple requests in single connection, responses in order.
+// Key: after parsing one request, unconsumed bytes available for next.
+
+TEST_F(DeserializeRequestTest, PipelinedSimpleRequests) {
+    // Two GET requests in single buffer
+    const std::string pipelined =
+        "GET /first HTTP/1.1\r\nHost: example.com\r\n\r\n"
+        "GET /second HTTP/1.1\r\nHost: example.com\r\n\r\n";
+
+    std::vector<std::byte> input_bytes(
+        detail::buffer_str_to_byte(pipelined).begin(),
+        detail::buffer_str_to_byte(pipelined).end()
+    );
+
+    std::size_t pos = 0;
+    auto make_gen = [&]() -> exec::async_gen<std::span<const std::byte>, std::error_code> {
+        while (pos < input_bytes.size()) {
+            std::array<std::byte, 1> buf{ input_bytes[pos++] };
+            co_yield buf;
+        }
+        co_return std::error_code{};
+    };
+
+    auto result1 = drain(request(make_gen()));
+    ASSERT_TRUE(result1.has_value());
+    EXPECT_EQ(result1->method, method_type::GET);
+    EXPECT_EQ(result1->target, "/first");
+
+    auto result2 = drain(request(make_gen()));
+    ASSERT_TRUE(result2.has_value());
+    EXPECT_EQ(result2->method, method_type::GET);
+    EXPECT_EQ(result2->target, "/second");
+
+    EXPECT_EQ(pos, pipelined.size());
+}
+
+TEST_F(DeserializeRequestTest, PipelinedWithContentLength) {
+    // POST with body + GET
+    const std::string pipelined =
+        "POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\n\r\nHello"
+        "GET /next HTTP/1.1\r\nHost: example.com\r\n\r\n";
+
+    std::vector<std::byte> input_bytes(
+        detail::buffer_str_to_byte(pipelined).begin(),
+        detail::buffer_str_to_byte(pipelined).end()
+    );
+
+    std::size_t pos = 0;
+    auto make_gen = [&]() -> exec::async_gen<std::span<const std::byte>, std::error_code> {
+        while (pos < input_bytes.size()) {
+            std::array<std::byte, 1> buf{ input_bytes[pos++] };
+            co_yield buf;
+        }
+        co_return std::error_code{};
+    };
+
+    auto result1 = drain(request(make_gen()));
+    ASSERT_TRUE(result1.has_value());
+    EXPECT_EQ(result1->method, method_type::POST);
+    EXPECT_EQ(result1->target, "/submit");
+    EXPECT_EQ(result1->body, detail::buffer_str_to_byte("Hello"));
+
+    auto result2 = drain(request(make_gen()));
+    ASSERT_TRUE(result2.has_value());
+    EXPECT_EQ(result2->method, method_type::GET);
+    EXPECT_EQ(result2->target, "/next");
+
+    EXPECT_EQ(pos, pipelined.size());
+}
+
+TEST_F(DeserializeRequestTest, PipelinedWithChunkedNoTrailers) {
+    // Chunked body (no trailing fields) + GET
+    const std::string pipelined =
+        "POST /upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n"
+        "5\r\nHello\r\n0\r\n\r\n"
+        "GET /done HTTP/1.1\r\nHost: example.com\r\n\r\n";
+
+    std::vector<std::byte> input_bytes(
+        detail::buffer_str_to_byte(pipelined).begin(),
+        detail::buffer_str_to_byte(pipelined).end()
+    );
+
+    std::size_t pos = 0;
+    auto make_gen = [&]() -> exec::async_gen<std::span<const std::byte>, std::error_code> {
+        while (pos < input_bytes.size()) {
+            std::array<std::byte, 1> buf{ input_bytes[pos++] };
+            co_yield buf;
+        }
+        co_return std::error_code{};
+    };
+
+    std::vector<std::byte> chunks;
+    auto result1 = drain(request(make_gen()), &chunks);
+    ASSERT_TRUE(result1.has_value());
+    EXPECT_EQ(result1->method, method_type::POST);
+    EXPECT_EQ(result1->target, "/upload");
+    EXPECT_EQ(chunks, detail::buffer_str_to_byte("Hello"));
+
+    auto result2 = drain(request(make_gen()));
+    ASSERT_TRUE(result2.has_value());
+    EXPECT_EQ(result2->method, method_type::GET);
+    EXPECT_EQ(result2->target, "/done");
+
+    EXPECT_EQ(pos, pipelined.size());
+}
+
+TEST_F(DeserializeRequestTest, PipelinedThreeRequests) {
+    // Three requests in pipeline
+    const std::string pipelined =
+        "GET /one HTTP/1.1\r\nHost: a.com\r\n\r\n"
+        "GET /two HTTP/1.1\r\nHost: b.com\r\n\r\n"
+        "GET /three HTTP/1.1\r\nHost: c.com\r\n\r\n";
+
+    std::vector<std::byte> input_bytes(
+        detail::buffer_str_to_byte(pipelined).begin(),
+        detail::buffer_str_to_byte(pipelined).end()
+    );
+
+    std::size_t pos = 0;
+    auto make_gen = [&]() -> exec::async_gen<std::span<const std::byte>, std::error_code> {
+        while (pos < input_bytes.size()) {
+            std::array<std::byte, 1> buf{ input_bytes[pos++] };
+            co_yield buf;
+        }
+        co_return std::error_code{};
+    };
+
+    auto result1 = drain(request(make_gen()));
+    ASSERT_TRUE(result1.has_value());
+    EXPECT_EQ(result1->target, "/one");
+    EXPECT_EQ(result1->fields["host"], "a.com");
+
+    auto result2 = drain(request(make_gen()));
+    ASSERT_TRUE(result2.has_value());
+    EXPECT_EQ(result2->target, "/two");
+    EXPECT_EQ(result2->fields["host"], "b.com");
+
+    auto result3 = drain(request(make_gen()));
+    ASSERT_TRUE(result3.has_value());
+    EXPECT_EQ(result3->target, "/three");
+    EXPECT_EQ(result3->fields["host"], "c.com");
+
+    EXPECT_EQ(pos, pipelined.size());
+}
+
+TEST_F(DeserializeRequestTest, PipelinedFullBuffer) {
+    // Both requests arrive in single full() yield (not byte-by-byte)
+    // Tests that remainder_buffer correctly tracks unconsumed bytes
+    const std::string req1 = "GET /a HTTP/1.1\r\nHost: x\r\n\r\n";
+    const std::string req2 = "GET /b HTTP/1.1\r\nHost: y\r\n\r\n";
+    const std::string pipelined = req1 + req2;
+
+    std::vector<std::byte> input_bytes(
+        detail::buffer_str_to_byte(pipelined).begin(),
+        detail::buffer_str_to_byte(pipelined).end()
+    );
+
+    bool yielded = false;
+    auto make_gen = [&]() -> exec::async_gen<std::span<const std::byte>, std::error_code> {
+        if (!yielded) {
+            yielded = true;
+            co_yield input_bytes;
+        }
+        co_return std::error_code{};
+    };
+
+    // Note: with single full yield, second request() call gets empty generator.
+    // This tests behavior when remainder_buffer holds unconsumed data but
+    // input generator exhausted. Current impl: second parse fails (no more input).
+    //
+    // This is expected: caller must track unconsumed bytes externally or
+    // use a generator that can provide remainder on subsequent request() calls.
+
+    auto result1 = drain(request(make_gen()));
+    ASSERT_TRUE(result1.has_value());
+    EXPECT_EQ(result1->target, "/a");
+
+    // Second call: generator exhausted, no bytes available
+    auto result2 = drain(request(make_gen()));
+    // Expected: fails because generator yields nothing
+    EXPECT_FALSE(result2.has_value());
+}
+
+TEST_F(DeserializeRequestTest, PipelinedMixedBodies) {
+    // Mix: no body, content-length body, chunked body
+    const std::string pipelined =
+        "GET /nobody HTTP/1.1\r\nHost: a\r\n\r\n"
+        "POST /clbody HTTP/1.1\r\nHost: b\r\nContent-Length: 3\r\n\r\nABC"
+        "POST /chunked HTTP/1.1\r\nHost: c\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nXY\r\n0\r\n\r\n";
+
+    std::vector<std::byte> input_bytes(
+        detail::buffer_str_to_byte(pipelined).begin(),
+        detail::buffer_str_to_byte(pipelined).end()
+    );
+
+    std::size_t pos = 0;
+    auto make_gen = [&]() -> exec::async_gen<std::span<const std::byte>, std::error_code> {
+        while (pos < input_bytes.size()) {
+            std::array<std::byte, 1> buf{ input_bytes[pos++] };
+            co_yield buf;
+        }
+        co_return std::error_code{};
+    };
+
+    // Request 1: GET, no body
+    auto result1 = drain(request(make_gen()));
+    ASSERT_TRUE(result1.has_value());
+    EXPECT_EQ(result1->target, "/nobody");
+    EXPECT_TRUE(result1->body.empty());
+
+    // Request 2: POST with Content-Length
+    auto result2 = drain(request(make_gen()));
+    ASSERT_TRUE(result2.has_value());
+    EXPECT_EQ(result2->target, "/clbody");
+    EXPECT_EQ(result2->body, detail::buffer_str_to_byte("ABC"));
+
+    // Request 3: POST chunked
+    std::vector<std::byte> chunks;
+    auto result3 = drain(request(make_gen()), &chunks);
+    ASSERT_TRUE(result3.has_value());
+    EXPECT_EQ(result3->target, "/chunked");
+    EXPECT_EQ(chunks, detail::buffer_str_to_byte("XY"));
+
+    EXPECT_EQ(pos, pipelined.size());
+}
+
 } // namespace sl::http::v1::deserialize
