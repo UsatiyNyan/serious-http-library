@@ -48,8 +48,8 @@ protected:
         co_return std::error_code{};
     }
 
-    exec::async<io_result<request_result>> drain_coro(
-        exec::async_gen<request_chunk, io_result<request_result>> request_in_progress,
+    exec::async<io_result<message_result>> drain_coro(
+        exec::async_gen<message_chunk, io_result<message_result>> request_in_progress,
         std::vector<std::byte>* chunk_buffer = nullptr,
         std::vector<std::string>* chunk_ext_buffer = nullptr
     ) {
@@ -69,8 +69,8 @@ protected:
     }
 
     using drain_error = std::variant<meta::unit, std::exception_ptr, std::error_code, status_type>;
-    meta::result<request_message, drain_error> drain(
-        exec::async_gen<request_chunk, io_result<request_result>> request_in_progress,
+    meta::result<message_type, drain_error> drain(
+        exec::async_gen<message_chunk, io_result<message_result>> request_in_progress,
         std::vector<std::byte>* chunk_buffer = nullptr,
         std::vector<std::string>* chunk_ext_buffer = nullptr
     ) {
@@ -383,7 +383,7 @@ TEST_F(DeserializeRequestTest, DuplicateHeadersCombinedCaseInsensitive) {
 
 TEST_F(DeserializeRequestTest, ContentLengthExceedsMaxBodySize) {
     // Use small max_body_size to test DoS protection
-    request_config config{ .max_body_size = 10 };
+    config_type config{ .max_body_size = 10 };
     auto result = drain(request(
         full("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 100\r\n\r\n"),
         config
@@ -393,7 +393,7 @@ TEST_F(DeserializeRequestTest, ContentLengthExceedsMaxBodySize) {
 }
 
 TEST_F(DeserializeRequestTest, ContentLengthWithinMaxBodySize) {
-    request_config config{ .max_body_size = 100 };
+    config_type config{ .max_body_size = 100 };
     auto result = drain(request(
         full("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\nHello, World!"),
         config
@@ -475,11 +475,11 @@ TEST_F(DeserializeRequestTest, TrailingFieldsCRLFOffset) {
     // Fix: use make_parse_more(request_state_complete{}, field_line_offset)
     // instead of make_parse_stop which returns offset=0.
 
-    request_message output;
-    const request_config config;
+    message_type output;
+    const config_type config;
 
     // State after "0\r\n" chunk and "Trailer: val\r\n" parsed
-    detail::request_state state = detail::request_state_trailing_fields{};
+    detail::state state = detail::state_trailing_fields{};
 
     // Empty field line = just CRLF = end of trailing fields
     const std::string_view input = "\r\nGET / HTTP/1.1\r\n"; // CRLF + next request
@@ -488,7 +488,7 @@ TEST_F(DeserializeRequestTest, TrailingFieldsCRLFOffset) {
     const auto [result, offset] = detail::parse_request(output, state, buffer, config);
 
     ASSERT_TRUE(result.has_value()) << "Should parse successfully";
-    EXPECT_TRUE(std::holds_alternative<detail::request_state_complete>(result.value()))
+    EXPECT_TRUE(std::holds_alternative<detail::state_complete>(result.value()))
         << "Should transition to complete state";
 
     // Offset must be 2 to consume CRLF, otherwise pipelining breaks

@@ -23,25 +23,24 @@
 
 namespace sl::http::v1::deserialize {
 
-exec::async_gen<request_chunk, io_result<request_result>>
-    request(exec::async_gen<std::span<const std::byte>, std::error_code> input, const request_config& config) {
+exec::async_gen<message_chunk, io_result<message_result>>
+    request(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config) {
 
-    detail::request_state state;
-    request_message output;
+    detail::state s;
+    message_type output;
 
     const auto do_parse = [&](
                               auto get_buffer, auto cond, auto add_offset
-                          ) -> exec::async_gen<request_chunk, meta::result<meta::unit, status_type>> {
+                          ) -> exec::async_gen<message_chunk, meta::result<meta::unit, status_type>> {
         while (cond()) {
-            auto* const chunked_state = std::get_if<detail::request_state_chunked_body>(&state);
+            auto* const chunked_state = std::get_if<detail::state_chunked_body>(&s);
             if (chunked_state == nullptr) {
-                const auto [new_state_or_err, offset] =
-                    detail::parse_request(output, state, get_buffer(), config);
+                const auto [new_state_or_err, offset] = detail::parse_request(output, s, get_buffer(), config);
 
                 if (!new_state_or_err.has_value()) {
                     co_return meta::err(new_state_or_err.error());
                 }
-                state = new_state_or_err.value();
+                s = new_state_or_err.value();
 
                 if (offset == 0) {
                     break;
@@ -49,7 +48,7 @@ exec::async_gen<request_chunk, io_result<request_result>>
                 add_offset(offset);
             } else {
                 const auto [new_chunked_state_or_err, offset] =
-                    detail::parse_request_chunk(output, std::move(*chunked_state), get_buffer());
+                    detail::parse_chunk(output, std::move(*chunked_state), get_buffer());
 
                 if (!new_chunked_state_or_err.has_value()) {
                     co_return meta::err(new_chunked_state_or_err.error());
@@ -57,22 +56,22 @@ exec::async_gen<request_chunk, io_result<request_result>>
                 const auto new_chunked_state = new_chunked_state_or_err.value();
 
                 if (auto* const a_chunked_complete_state =
-                        std::get_if<detail::request_state_chunked_body_complete>(&new_chunked_state);
+                        std::get_if<detail::state_chunked_body_complete>(&new_chunked_state);
                     a_chunked_complete_state != nullptr) {
 
-                    co_yield request_chunk{
+                    co_yield message_chunk{
                         .message = output,
                         .chunk_ext = std::move(a_chunked_complete_state->chunk_ext),
                         .chunk = a_chunked_complete_state->chunk,
                     };
 
                     if (a_chunked_complete_state->chunk.empty()) { // detected last-chunk
-                        state = detail::request_state_trailing_fields{};
+                        s = detail::state_trailing_fields{};
                     } else {
-                        state = detail::request_state_chunked_body{ detail::request_state_chunked_body_empty{} };
+                        s = detail::state_chunked_body{ detail::state_chunked_body_empty{} };
                     }
                 } else {
-                    state = new_chunked_state_or_err.value();
+                    s = new_chunked_state_or_err.value();
                 }
 
                 if (offset == 0) {
@@ -104,7 +103,7 @@ exec::async_gen<request_chunk, io_result<request_result>>
             }
             const auto result = std::move(asyncgen).result_or_throw();
             if (!result.has_value()) {
-                co_return request_result{ meta::err(result.error()) };
+                co_return message_result{ meta::err(result.error()) };
             }
         }
 
@@ -124,11 +123,11 @@ exec::async_gen<request_chunk, io_result<request_result>>
         }
         const auto result = std::move(asyncgen).result_or_throw();
         if (!result.has_value()) {
-            co_return request_result{ meta::err(result.error()) };
+            co_return message_result{ meta::err(result.error()) };
         }
 
-        if (std::holds_alternative<detail::request_state_complete>(state)) {
-            co_return request_result{ std::move(output) };
+        if (std::holds_alternative<detail::state_complete>(s)) {
+            co_return message_result{ std::move(output) };
         }
     }
 
@@ -137,37 +136,27 @@ exec::async_gen<request_chunk, io_result<request_result>>
 
 namespace detail {
 
-parse_result<meta::result<request_state, status_type>> parse_request(
-    request_message& output,
-    request_state state,
-    std::span<const std::byte> byte_buffer,
-    const request_config& config
-) {
+parse_result<meta::result<state, status_type>>
+    parse_request(message_type& output, state s, std::span<const std::byte> byte_buffer, const config_type& config) {
     const auto str_buffer = buffer_byte_to_str(byte_buffer);
 
     return std::visit(
         meta::overloaded{
-            [](request_state_chunked_body a_state) { return make_parse_stop(a_state); },
-            [](request_state_complete a_state) { return make_parse_stop(a_state); },
-            [&](request_state_body a_state) { return parse_request_part(output, a_state, byte_buffer); },
-            [&](request_state_version a_state) {
-                return parse_request_part(output, request_state_fields{}, str_buffer, config);
-            },
-            [&](request_state_fields a_state) {
-                return parse_request_part(output, a_state, str_buffer, config);
-            },
-            [&](request_state_trailing_fields a_state) {
-                return parse_request_part(output, a_state, str_buffer, config);
-            },
-            [&](auto a_state) { return parse_request_part(output, a_state, str_buffer); },
+            [](state_chunked_body a_s) { return make_parse_stop(a_s); },
+            [](state_complete a_s) { return make_parse_stop(a_s); },
+            [&](state_body a_s) { return parse_part(output, a_s, byte_buffer); },
+            [&](request_state_version a_s) { return parse_part(output, state_fields{}, str_buffer, config); },
+            [&](state_fields a_s) { return parse_part(output, a_s, str_buffer, config); },
+            [&](state_trailing_fields a_s) { return parse_part(output, a_s, str_buffer, config); },
+            [&](auto a_s) { return parse_part(output, a_s, str_buffer); },
         },
-        state
+        s
     );
 }
 
 // method SP
-parse_result<meta::result<request_state, status_type>>
-    parse_request_part(request_message& output, request_state_empty state, std::string_view buffer) {
+parse_result<meta::result<state, status_type>>
+    parse_part(message_type& output, state_empty s, std::string_view buffer) {
     constexpr std::size_t method_max_length = enum_max_str_length<method_type>();
 
     const auto method_result = try_find(buffer, tokens::SP, method_max_length);
@@ -177,7 +166,7 @@ parse_result<meta::result<request_state, status_type>>
             return make_parse_stop(status_type::NOT_IMPLEMENTED);
         }
         DEBUG_ASSERT(method_err == find_err::NOT_FOUND);
-        return make_parse_stop(state);
+        return make_parse_stop(s);
     }
 
     const auto& [method_str, method_offset] = method_result.value();
@@ -191,8 +180,8 @@ parse_result<meta::result<request_state, status_type>>
 }
 
 // request-target SP
-parse_result<meta::result<request_state, status_type>>
-    parse_request_part(request_message& output, request_state_method state, std::string_view buffer) {
+parse_result<meta::result<state, status_type>>
+    parse_part(message_type& output, request_state_method s, std::string_view buffer) {
     // recommended as per https://www.rfc-editor.org/rfc/rfc9112.html#name-request-line
     constexpr std::size_t target_max_length = 8000;
 
@@ -203,7 +192,7 @@ parse_result<meta::result<request_state, status_type>>
             return make_parse_stop(status_type::URI_TOO_LONG);
         }
         DEBUG_ASSERT(target_err == find_err::NOT_FOUND);
-        return make_parse_stop(state);
+        return make_parse_stop(s);
     }
     const auto& [target_str, target_offset] = target_result.value();
 
@@ -217,8 +206,8 @@ parse_result<meta::result<request_state, status_type>>
 }
 
 // HTTP-version CRLF
-parse_result<meta::result<request_state, status_type>>
-    parse_request_part(request_message& output, request_state_target state, std::string_view buffer) {
+parse_result<meta::result<state, status_type>>
+    parse_part(message_type& output, request_state_target s, std::string_view buffer) {
     constexpr std::size_t version_max_length = enum_max_str_length<version_type>();
 
     const auto version_result = try_find(buffer, tokens::CRLF, version_max_length);
@@ -228,7 +217,7 @@ parse_result<meta::result<request_state, status_type>>
             return make_parse_stop(status_type::BAD_REQUEST);
         }
         DEBUG_ASSERT(version_err == find_err::NOT_FOUND);
-        return make_parse_stop(state);
+        return make_parse_stop(s);
     }
 
     const auto& [version_str, version_offset] = version_result.value();
@@ -244,13 +233,13 @@ parse_result<meta::result<request_state, status_type>>
 // *( field-line CRLF ) CRLF
 // field-line   = field-name ":" OWS field-value OWS
 // OWS = *(SP / HTAB)
-parse_result<meta::result<request_state, status_type>> parse_request_part(
-    request_message& output,
-    std::variant<request_state_fields, request_state_trailing_fields> state,
+parse_result<meta::result<state, status_type>> parse_part(
+    message_type& output,
+    std::variant<state_fields, state_trailing_fields> s,
     std::string_view buffer,
-    const request_config& config
+    const config_type& config
 ) {
-    const std::size_t consumed_bytes = std::visit([](const auto& a_state) { return a_state.consumed_bytes; }, state);
+    const std::size_t consumed_bytes = std::visit([](const auto& a_s) { return a_s.consumed_bytes; }, s);
     const auto field_line_result = try_find(buffer, tokens::CRLF, config.max_field_size - consumed_bytes);
     if (!field_line_result.has_value()) {
         const auto& field_line_err = field_line_result.error();
@@ -258,21 +247,21 @@ parse_result<meta::result<request_state, status_type>> parse_request_part(
             return make_parse_stop(status_type::CONTENT_TOO_LARGE);
         }
         DEBUG_ASSERT(field_line_err == find_err::NOT_FOUND);
-        return std::visit([](auto& a_state) { return make_parse_stop(a_state); }, state);
+        return std::visit([](auto& a_s) { return make_parse_stop(a_s); }, s);
     }
     const auto& [field_line, field_line_offset] = field_line_result.value();
 
     if (field_line.empty()) { // detected last CRLF
         return std::visit(
             meta::overloaded{
-                [&](request_state_fields a_state) {
-                    return parse_result<meta::result<request_state, status_type>>::more(
-                        parse_fields_finalize(output, a_state.consumed_bytes, config), field_line_offset
+                [&](state_fields a_s) {
+                    return parse_result<meta::result<state, status_type>>::more(
+                        parse_fields_finalize(output, a_s.consumed_bytes, config), field_line_offset
                     );
                 },
-                [&](request_state_trailing_fields) { return make_parse_more(request_state_complete{}, field_line_offset); },
+                [&](state_trailing_fields) { return make_parse_more(state_complete{}, field_line_offset); },
             },
-            state
+            s
         );
     }
 
@@ -298,16 +287,16 @@ parse_result<meta::result<request_state, status_type>> parse_request_part(
     }
 
     return std::visit(
-        [field_line_offset](auto& a_state) {
-            a_state.consumed_bytes += field_line_offset;
-            return make_parse_more(a_state, field_line_offset);
+        [field_line_offset](auto& a_s) {
+            a_s.consumed_bytes += field_line_offset;
+            return make_parse_more(a_s, field_line_offset);
         },
-        state
+        s
     );
 }
 
-meta::result<request_state, status_type>
-    parse_fields_finalize(request_message& output, std::size_t fields_consumed_bytes, const request_config& config) {
+meta::result<state, status_type>
+    parse_fields_finalize(message_type& output, std::size_t fields_consumed_bytes, const config_type& config) {
     const auto find_field = [&fields = output.fields](std::string_view k) -> meta::maybe<std::string_view> {
         DEBUG_ASSERT(is_lowercase(k));
         auto it = fields.find(k);
@@ -347,7 +336,7 @@ meta::result<request_state, status_type>
             return meta::err(status_type::BAD_REQUEST);
         }
 
-        return request_state_chunked_body{ detail::request_state_chunked_body_empty{} };
+        return state_chunked_body{ detail::state_chunked_body_empty{} };
     }
 
     const auto maybe_content_length =
@@ -363,38 +352,38 @@ meta::result<request_state, status_type>
 
     const auto content_length = maybe_content_length.value_or(0);
     if (content_length == 0) {
-        return request_state_complete{};
+        return state_complete{};
     }
 
     if (content_length > config.max_body_size) {
         return meta::err(status_type::CONTENT_TOO_LARGE);
     }
 
-    return request_state_body{ .content_length = content_length };
+    return state_body{ .content_length = content_length };
 }
 
-parse_result<meta::result<request_state, status_type>>
-    parse_request_part(request_message& output, request_state_body state, std::span<const std::byte> buffer) {
-    ASSERT(state.content_length > output.body.size());
+parse_result<meta::result<state, status_type>>
+    parse_part(message_type& output, state_body s, std::span<const std::byte> buffer) {
+    ASSERT(s.content_length > output.body.size());
 
-    const std::size_t content_length_left = state.content_length - output.body.size();
+    const std::size_t content_length_left = s.content_length - output.body.size();
     const std::size_t limited_byte_buffer_size = std::min(content_length_left, buffer.size());
     const auto limited_byte_buffer = buffer.subspan(0, limited_byte_buffer_size);
     output.body.insert(output.body.end(), limited_byte_buffer.begin(), limited_byte_buffer.end());
 
-    if (output.body.size() < state.content_length) {
-        return make_parse_more(state, limited_byte_buffer_size);
+    if (output.body.size() < s.content_length) {
+        return make_parse_more(s, limited_byte_buffer_size);
     }
 
-    ASSERT(output.body.size() == state.content_length);
-    return make_parse_more(request_state_complete{}, limited_byte_buffer_size);
+    ASSERT(output.body.size() == s.content_length);
+    return make_parse_more(state_complete{}, limited_byte_buffer_size);
 }
 
-parse_result<meta::result<request_state_chunked_body, status_type>>
-    parse_request_chunk(request_message& output, request_state_chunked_body state, std::span<const std::byte> buffer) {
+parse_result<meta::result<state_chunked_body, status_type>>
+    parse_chunk(message_type& output, state_chunked_body s, std::span<const std::byte> buffer) {
     return std::visit(
         meta::overloaded{
-            [&buffer](request_state_chunked_body_empty a_state) {
+            [&buffer](state_chunked_body_empty a_s) {
                 constexpr std::size_t max_chunk_size_size = 8;
                 constexpr auto max_chunk_line_size = max_chunk_size_size + 8 * 1024; // 8B + 8KiB
 
@@ -405,7 +394,7 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
                         return make_parse_chunk_stop(status_type::BAD_REQUEST);
                     }
                     DEBUG_ASSERT(chunk_line_err == find_err::NOT_FOUND);
-                    return make_parse_chunk_stop(std::move(a_state));
+                    return make_parse_chunk_stop(std::move(a_s));
                 }
                 const auto& chunk_line_ok = chunk_line_result.value();
 
@@ -437,7 +426,7 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
 
                 if (chunk_size == 0) { // last-chunk
                     return make_parse_chunk_more(
-                        request_state_chunked_body_complete{
+                        state_chunked_body_complete{
                             .chunk_ext{ chunk_ext },
                             .chunk{},
                         },
@@ -446,7 +435,7 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
                 }
 
                 return make_parse_chunk_more(
-                    request_state_chunked_body_line{
+                    state_chunked_body_line{
                         .chunk_ext{ chunk_ext },
                         .chunk_size = chunk_size,
                     },
@@ -454,11 +443,11 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
                 );
             },
 
-            [&buffer](request_state_chunked_body_line a_state) {
-                const std::uint32_t chunk_size = a_state.chunk_size;
+            [&buffer](state_chunked_body_line a_s) {
+                const std::uint32_t chunk_size = a_s.chunk_size;
                 const std::size_t offset = chunk_size + tokens::CRLF.size();
                 if (buffer.size() < offset) {
-                    return make_parse_chunk_stop(std::move(a_state));
+                    return make_parse_chunk_stop(std::move(a_s));
                 }
 
                 if (const std::string_view crlf_expected =
@@ -468,8 +457,8 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
                 }
 
                 return make_parse_chunk_more(
-                    request_state_chunked_body_complete{
-                        .chunk_ext = std::move(a_state.chunk_ext),
+                    state_chunked_body_complete{
+                        .chunk_ext = std::move(a_s.chunk_ext),
                         .chunk = buffer.subspan(0, chunk_size),
                     },
                     offset
@@ -477,9 +466,9 @@ parse_result<meta::result<request_state_chunked_body, status_type>>
             },
 
             // shouldn't enter this branch
-            [](request_state_chunked_body_complete a_state) { return make_parse_chunk_stop(std::move(a_state)); },
+            [](state_chunked_body_complete a_s) { return make_parse_chunk_stop(std::move(a_s)); },
         },
-        std::move(state)
+        std::move(s)
     );
 }
 
