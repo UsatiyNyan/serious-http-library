@@ -24,6 +24,15 @@ bool operator==(unit, unit) { return true; }
 
 namespace sl::http::v1::deserialize {
 
+// Helper to check origin-form target path
+std::string_view get_origin_path(const target_type& t) {
+    const auto* origin = std::get_if<origin_target_type>(&t);
+    if (!origin) {
+        throw std::runtime_error("Expected origin_target_type");
+    }
+    return origin->raw_path;
+}
+
 class DeserializeRequestTest : public ::testing::Test {
 protected:
     exec::async_gen<std::span<const std::byte>, std::error_code> full(std::string_view input) {
@@ -100,7 +109,7 @@ TEST_F(DeserializeRequestTest, ValidInput) {
     auto result = drain(request(full("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::GET);
-    EXPECT_EQ(result->target, "/");
+    EXPECT_EQ(get_origin_path(result->target), "/");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
 }
 
@@ -115,7 +124,7 @@ TEST_F(DeserializeRequestTest, ValidInputWithBody) {
         drain(request(full("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\nHello, World!")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/submit");
+    EXPECT_EQ(get_origin_path(result->target), "/submit");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_EQ(result->body, detail::buffer_str_to_byte("Hello, World!"));
 }
@@ -124,7 +133,7 @@ TEST_F(DeserializeRequestTest, OneByOneInput) {
     auto result = drain(request(one_by_one("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::GET);
-    EXPECT_EQ(result->target, "/");
+    EXPECT_EQ(get_origin_path(result->target), "/");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
 }
 
@@ -134,7 +143,7 @@ TEST_F(DeserializeRequestTest, OneByOneInputWithBody) {
     );
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/submit");
+    EXPECT_EQ(get_origin_path(result->target), "/submit");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_EQ(result->body, detail::buffer_str_to_byte("Hello, World!"));
 }
@@ -143,7 +152,7 @@ TEST_F(DeserializeRequestTest, ValidInputWithHeaders) {
     auto result = drain(request(full("GET /resource HTTP/1.1\r\nHost: example.com\r\nUser-Agent: Test\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::GET);
-    EXPECT_EQ(result->target, "/resource");
+    EXPECT_EQ(get_origin_path(result->target), "/resource");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_EQ(result->fields["host"], "example.com");
     EXPECT_EQ(result->fields["user-agent"], "Test");
@@ -159,7 +168,7 @@ TEST_F(DeserializeRequestTest, ValidInputWithChunkedBody) {
     );
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/upload");
+    EXPECT_EQ(get_origin_path(result->target), "/upload");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_TRUE(result->body.empty());
     EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
@@ -175,7 +184,7 @@ TEST_F(DeserializeRequestTest, ValidInputOneByOneWithChunkedBody) {
     );
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/upload");
+    EXPECT_EQ(get_origin_path(result->target), "/upload");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_TRUE(result->body.empty());
     EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
@@ -193,7 +202,7 @@ TEST_F(DeserializeRequestTest, TransferEncodingNoSpaceAfterComma) {
     );
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/upload");
+    EXPECT_EQ(get_origin_path(result->target), "/upload");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_TRUE(result->body.empty());
     EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
@@ -210,7 +219,7 @@ TEST_F(DeserializeRequestTest, TransferEncodingExtraWhitespace) {
     );
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/upload");
+    EXPECT_EQ(get_origin_path(result->target), "/upload");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_TRUE(result->body.empty());
     EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
@@ -221,7 +230,7 @@ TEST_F(DeserializeRequestTest, InvalidInputWithMissingHeaders) {
     auto result = drain(request(full("GET / HTTP/1.1\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::GET);
-    EXPECT_EQ(result->target, "/");
+    EXPECT_EQ(get_origin_path(result->target), "/");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
 }
 
@@ -232,7 +241,7 @@ TEST_F(DeserializeRequestTest, ValidInputWithLongBody) {
     ))));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/submit");
+    EXPECT_EQ(get_origin_path(result->target), "/submit");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_EQ(result->body, detail::buffer_str_to_byte(long_body));
 }
@@ -242,7 +251,7 @@ TEST_F(DeserializeRequestTest, ValidInputWithMultipleHeaders) {
         drain(request(full("GET /multi HTTP/1.1\r\nHost: example.com\r\nUser-Agent: Test\r\nAccept: */*\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::GET);
-    EXPECT_EQ(result->target, "/multi");
+    EXPECT_EQ(get_origin_path(result->target), "/multi");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_EQ(result->fields["host"], "example.com");
     EXPECT_EQ(result->fields["user-agent"], "Test");
@@ -253,7 +262,7 @@ TEST_F(DeserializeRequestTest, ValidInputWithNoBody) {
     auto result = drain(request(full("HEAD /nobody HTTP/1.1\r\nHost: example.com\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::HEAD);
-    EXPECT_EQ(result->target, "/nobody");
+    EXPECT_EQ(get_origin_path(result->target), "/nobody");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_TRUE(result->body.empty());
 }
@@ -262,7 +271,13 @@ TEST_F(DeserializeRequestTest, ValidInputWithQueryParameters) {
     auto result = drain(request(full("GET /search?q=test HTTP/1.1\r\nHost: example.com\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::GET);
-    EXPECT_EQ(result->target, "/search?q=test");
+    const auto* origin = std::get_if<origin_target_type>(&result->target);
+    ASSERT_NE(origin, nullptr);
+    EXPECT_EQ(origin->raw_path, "/search");
+    EXPECT_EQ(origin->raw_query, "q=test");
+    ASSERT_EQ(origin->query.size(), 1);
+    EXPECT_EQ(origin->query[0].first, "q");
+    EXPECT_EQ(origin->query[0].second, "test");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
 }
 
@@ -281,7 +296,7 @@ TEST_F(DeserializeRequestTest, ValidInputWithTrailingFields) {
                            "Trailer-Header: value\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/submit");
+    EXPECT_EQ(get_origin_path(result->target), "/submit");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_EQ(result->fields["host"], "example.com");
     EXPECT_EQ(result->fields["trailer-header"], "value");
@@ -296,7 +311,7 @@ TEST_F(DeserializeRequestTest, OneByOneInputWithTrailingFields) {
                                  "Trailer-Header: value\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/submit");
+    EXPECT_EQ(get_origin_path(result->target), "/submit");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_EQ(result->fields["host"], "example.com");
     EXPECT_EQ(result->fields["trailer-header"], "value");
@@ -315,7 +330,7 @@ TEST_F(DeserializeRequestTest, ValidInputWithChunkExtensions) {
     );
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/upload");
+    EXPECT_EQ(get_origin_path(result->target), "/upload");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_TRUE(result->body.empty());
     EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
@@ -335,7 +350,7 @@ TEST_F(DeserializeRequestTest, OneByOneInputWithChunkExtensions) {
     );
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->method, method_type::POST);
-    EXPECT_EQ(result->target, "/upload");
+    EXPECT_EQ(get_origin_path(result->target), "/upload");
     EXPECT_EQ(result->version, version_type::HTTPv1_1);
     EXPECT_TRUE(result->body.empty());
     EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
@@ -435,7 +450,7 @@ TEST_F(DeserializeRequestTest, PipelinedRequestsWithTrailingFields) {
     auto result1 = drain(request(make_gen()), &chunks1);
     ASSERT_TRUE(result1.has_value()) << "Request 1 should parse";
     EXPECT_EQ(result1->method, method_type::POST);
-    EXPECT_EQ(result1->target, "/submit");
+    EXPECT_EQ(get_origin_path(result1->target), "/submit");
     EXPECT_EQ(result1->fields["trailer-header"], "value");
     EXPECT_EQ(chunks1, detail::buffer_str_to_byte("Hello"));
 
@@ -446,7 +461,7 @@ TEST_F(DeserializeRequestTest, PipelinedRequestsWithTrailingFields) {
     auto result2 = drain(request(make_gen()));
     ASSERT_TRUE(result2.has_value()) << "Request 2 should parse";
     EXPECT_EQ(result2->method, method_type::GET);
-    EXPECT_EQ(result2->target, "/page");
+    EXPECT_EQ(get_origin_path(result2->target), "/page");
 
     // All bytes consumed
     EXPECT_EQ(pos, pipelined.size()) << "All bytes should be consumed";
@@ -507,12 +522,12 @@ TEST_F(DeserializeRequestTest, PipelinedSimpleRequests) {
     auto result1 = drain(request(make_gen()));
     ASSERT_TRUE(result1.has_value());
     EXPECT_EQ(result1->method, method_type::GET);
-    EXPECT_EQ(result1->target, "/first");
+    EXPECT_EQ(get_origin_path(result1->target), "/first");
 
     auto result2 = drain(request(make_gen()));
     ASSERT_TRUE(result2.has_value());
     EXPECT_EQ(result2->method, method_type::GET);
-    EXPECT_EQ(result2->target, "/second");
+    EXPECT_EQ(get_origin_path(result2->target), "/second");
 
     EXPECT_EQ(pos, pipelined.size());
 }
@@ -540,13 +555,13 @@ TEST_F(DeserializeRequestTest, PipelinedWithContentLength) {
     auto result1 = drain(request(make_gen()));
     ASSERT_TRUE(result1.has_value());
     EXPECT_EQ(result1->method, method_type::POST);
-    EXPECT_EQ(result1->target, "/submit");
+    EXPECT_EQ(get_origin_path(result1->target), "/submit");
     EXPECT_EQ(result1->body, detail::buffer_str_to_byte("Hello"));
 
     auto result2 = drain(request(make_gen()));
     ASSERT_TRUE(result2.has_value());
     EXPECT_EQ(result2->method, method_type::GET);
-    EXPECT_EQ(result2->target, "/next");
+    EXPECT_EQ(get_origin_path(result2->target), "/next");
 
     EXPECT_EQ(pos, pipelined.size());
 }
@@ -576,13 +591,13 @@ TEST_F(DeserializeRequestTest, PipelinedWithChunkedNoTrailers) {
     auto result1 = drain(request(make_gen()), &chunks);
     ASSERT_TRUE(result1.has_value());
     EXPECT_EQ(result1->method, method_type::POST);
-    EXPECT_EQ(result1->target, "/upload");
+    EXPECT_EQ(get_origin_path(result1->target), "/upload");
     EXPECT_EQ(chunks, detail::buffer_str_to_byte("Hello"));
 
     auto result2 = drain(request(make_gen()));
     ASSERT_TRUE(result2.has_value());
     EXPECT_EQ(result2->method, method_type::GET);
-    EXPECT_EQ(result2->target, "/done");
+    EXPECT_EQ(get_origin_path(result2->target), "/done");
 
     EXPECT_EQ(pos, pipelined.size());
 }
@@ -610,17 +625,17 @@ TEST_F(DeserializeRequestTest, PipelinedThreeRequests) {
 
     auto result1 = drain(request(make_gen()));
     ASSERT_TRUE(result1.has_value());
-    EXPECT_EQ(result1->target, "/one");
+    EXPECT_EQ(get_origin_path(result1->target), "/one");
     EXPECT_EQ(result1->fields["host"], "a.com");
 
     auto result2 = drain(request(make_gen()));
     ASSERT_TRUE(result2.has_value());
-    EXPECT_EQ(result2->target, "/two");
+    EXPECT_EQ(get_origin_path(result2->target), "/two");
     EXPECT_EQ(result2->fields["host"], "b.com");
 
     auto result3 = drain(request(make_gen()));
     ASSERT_TRUE(result3.has_value());
-    EXPECT_EQ(result3->target, "/three");
+    EXPECT_EQ(get_origin_path(result3->target), "/three");
     EXPECT_EQ(result3->fields["host"], "c.com");
 
     EXPECT_EQ(pos, pipelined.size());
@@ -656,7 +671,7 @@ TEST_F(DeserializeRequestTest, PipelinedFullBuffer) {
 
     auto result1 = drain(request(make_gen()));
     ASSERT_TRUE(result1.has_value());
-    EXPECT_EQ(result1->target, "/a");
+    EXPECT_EQ(get_origin_path(result1->target), "/a");
 
     // Second call: generator exhausted, no bytes available
     auto result2 = drain(request(make_gen()));
@@ -688,20 +703,20 @@ TEST_F(DeserializeRequestTest, PipelinedMixedBodies) {
     // Request 1: GET, no body
     auto result1 = drain(request(make_gen()));
     ASSERT_TRUE(result1.has_value());
-    EXPECT_EQ(result1->target, "/nobody");
+    EXPECT_EQ(get_origin_path(result1->target), "/nobody");
     EXPECT_TRUE(result1->body.empty());
 
     // Request 2: POST with Content-Length
     auto result2 = drain(request(make_gen()));
     ASSERT_TRUE(result2.has_value());
-    EXPECT_EQ(result2->target, "/clbody");
+    EXPECT_EQ(get_origin_path(result2->target), "/clbody");
     EXPECT_EQ(result2->body, detail::buffer_str_to_byte("ABC"));
 
     // Request 3: POST chunked
     std::vector<std::byte> chunks;
     auto result3 = drain(request(make_gen()), &chunks);
     ASSERT_TRUE(result3.has_value());
-    EXPECT_EQ(result3->target, "/chunked");
+    EXPECT_EQ(get_origin_path(result3->target), "/chunked");
     EXPECT_EQ(chunks, detail::buffer_str_to_byte("XY"));
 
     EXPECT_EQ(pos, pipelined.size());
