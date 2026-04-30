@@ -12,14 +12,15 @@
 #include <string>
 #include <string_view>
 
-namespace sl::http::v1::deserialize::detail {
+namespace sl::http::v1::detail {
 
-std::string to_lowercase(std::string_view str);
-bool is_lowercase(std::string_view str);
+std::string_view buffer_byte_to_str(std::span<const std::byte> byte_buffer);
+std::span<const std::byte> buffer_str_to_byte(std::string_view str_buffer);
 
 namespace tokens {
 
 constexpr std::string_view SP = " ";
+constexpr std::string_view COLON = ":";
 constexpr std::string_view HTAB = "\t";
 constexpr std::string_view CRLF = "\r\n";
 constexpr std::string_view HTTP = "HTTP";
@@ -27,9 +28,16 @@ constexpr std::string_view HTTP = "HTTP";
 constexpr auto is_ws(char c) { return c == ' ' || c == '\t'; }
 
 } // namespace tokens
+} // namespace sl::http::v1::detail
 
-std::string_view buffer_byte_to_str(std::span<const std::byte> byte_buffer);
-std::span<const std::byte> buffer_str_to_byte(std::string_view str_buffer);
+namespace sl::http::v1::deserialize::detail {
+
+std::string to_lowercase(std::string_view str);
+bool is_lowercase(std::string_view str);
+
+namespace tokens = v1::detail::tokens;
+using v1::detail::buffer_byte_to_str;
+using v1::detail::buffer_str_to_byte;
 
 std::string_view strip_prefix(std::string_view str, std::string_view prefix);
 std::string_view strip_suffix(std::string_view str, std::string_view suffix);

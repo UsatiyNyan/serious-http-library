@@ -10,6 +10,20 @@
 #include <bit>
 #include <cctype>
 
+namespace sl::http::v1::detail {
+
+std::string_view buffer_byte_to_str(std::span<const std::byte> byte_buffer) {
+    const auto char_buffer = std::bit_cast<std::span<const char>>(byte_buffer);
+    return std::string_view{ char_buffer.data(), char_buffer.size() };
+}
+
+std::span<const std::byte> buffer_str_to_byte(std::string_view str_buffer) {
+    const std::span<const char> char_buffer{ str_buffer.data(), str_buffer.size() };
+    return std::bit_cast<std::span<const std::byte>>(char_buffer);
+}
+
+} // namespace sl::http::v1::detail
+
 namespace sl::http::v1::deserialize::detail {
 
 std::string to_lowercase(std::string_view str) {
@@ -28,16 +42,6 @@ bool is_lowercase(std::string_view str) {
         }
     }
     return true;
-}
-
-std::string_view buffer_byte_to_str(std::span<const std::byte> byte_buffer) {
-    const auto char_buffer = std::bit_cast<std::span<const char>>(byte_buffer);
-    return std::string_view{ char_buffer.data(), char_buffer.size() };
-}
-
-std::span<const std::byte> buffer_str_to_byte(std::string_view str_buffer) {
-    const std::span<const char> char_buffer{ str_buffer.data(), str_buffer.size() };
-    return std::bit_cast<std::span<const std::byte>>(char_buffer);
 }
 
 std::string_view strip_prefix(std::string_view str, std::string_view prefix) {
