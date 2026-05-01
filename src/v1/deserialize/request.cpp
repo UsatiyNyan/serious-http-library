@@ -26,7 +26,7 @@ namespace sl::http::v1::deserialize {
 exec::async_gen<message_chunk, io_result<message_result>>
     request(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config) {
 
-    detail::state s;
+    detail::state s = detail::state_start_line_request{ detail::state_start_line_request_method{} };
     message_type output;
 
     const auto do_parse = [&](
@@ -145,7 +145,6 @@ parse_result<meta::result<state, status_type>>
             [](state_chunked_body a_s) { return make_parse_stop(a_s); },
             [](state_complete a_s) { return make_parse_stop(a_s); },
             [&](state_body a_s) { return parse_part(output, a_s, byte_buffer); },
-            [&](request_state_version a_s) { return parse_part(output, state_fields{}, str_buffer, config); },
             [&](state_fields a_s) { return parse_part(output, a_s, str_buffer, config); },
             [&](state_trailing_fields a_s) { return parse_part(output, a_s, str_buffer, config); },
             [&](auto a_s) { return parse_part(output, a_s, str_buffer); },
@@ -154,80 +153,81 @@ parse_result<meta::result<state, status_type>>
     );
 }
 
-// method SP
+// method SP request-target SP HTTP-version CRLF
 parse_result<meta::result<state, status_type>>
-    parse_part(message_type& output, state_empty s, std::string_view buffer) {
-    constexpr std::size_t method_max_length = enum_max_str_length<method_type>();
+    parse_part(message_type& output, state_start_line_request s, std::string_view buffer) {
+    return std::visit(
+        meta::overloaded{
+            [&](state_start_line_request_method) {
+                constexpr std::size_t method_max_length = enum_max_str_length<method_type>();
 
-    const auto method_result = try_find(buffer, tokens::SP, method_max_length);
-    if (!method_result.has_value()) {
-        const auto& method_err = method_result.error();
-        if (method_err == find_err::MAX_SIZE_EXCEEDED) {
-            return make_parse_stop(status_type::NOT_IMPLEMENTED);
-        }
-        DEBUG_ASSERT(method_err == find_err::NOT_FOUND);
-        return make_parse_stop(s);
-    }
+                const auto method_result = try_find(buffer, tokens::SP, method_max_length);
+                if (!method_result.has_value()) {
+                    const auto& method_err = method_result.error();
+                    if (method_err == find_err::MAX_SIZE_EXCEEDED) {
+                        return make_parse_stop(status_type::NOT_IMPLEMENTED);
+                    }
+                    DEBUG_ASSERT(method_err == find_err::NOT_FOUND);
+                    return make_parse_stop(s);
+                }
 
-    const auto& [method_str, method_offset] = method_result.value();
-    const auto method = meta::enum_from_str<method_type>(method_str);
-    if (method == method_type::ENUM_END) {
-        return make_parse_stop(status_type::BAD_REQUEST);
-    }
+                const auto& [method_str, method_offset] = method_result.value();
+                const auto method = meta::enum_from_str<method_type>(method_str);
+                if (method == method_type::ENUM_END) {
+                    return make_parse_stop(status_type::BAD_REQUEST);
+                }
 
-    output.method = method;
-    return make_parse_more(request_state_method{}, method_offset);
-}
+                output.method = method;
+                return make_parse_more(state_start_line_request{ state_start_line_request_target{} }, method_offset);
+            },
+            [&](state_start_line_request_target) {
+                // recommended as per https://www.rfc-editor.org/rfc/rfc9112.html#name-request-line
+                constexpr std::size_t target_max_length = 8000;
 
-// request-target SP
-parse_result<meta::result<state, status_type>>
-    parse_part(message_type& output, request_state_method s, std::string_view buffer) {
-    // recommended as per https://www.rfc-editor.org/rfc/rfc9112.html#name-request-line
-    constexpr std::size_t target_max_length = 8000;
+                const auto target_result = try_find(buffer, tokens::SP, target_max_length);
+                if (!target_result.has_value()) {
+                    const auto& target_err = target_result.error();
+                    if (target_err == find_err::MAX_SIZE_EXCEEDED) {
+                        return make_parse_stop(status_type::URI_TOO_LONG);
+                    }
+                    DEBUG_ASSERT(target_err == find_err::NOT_FOUND);
+                    return make_parse_stop(s);
+                }
+                const auto& [target_str, target_offset] = target_result.value();
 
-    const auto target_result = try_find(buffer, tokens::SP, target_max_length);
-    if (!target_result.has_value()) {
-        const auto& target_err = target_result.error();
-        if (target_err == find_err::MAX_SIZE_EXCEEDED) {
-            return make_parse_stop(status_type::URI_TOO_LONG);
-        }
-        DEBUG_ASSERT(target_err == find_err::NOT_FOUND);
-        return make_parse_stop(s);
-    }
-    const auto& [target_str, target_offset] = target_result.value();
+                auto maybe_target = deserialize::target(target_str);
+                if (!maybe_target.has_value()) {
+                    return make_parse_stop(status_type::BAD_REQUEST);
+                }
 
-    auto maybe_target = deserialize::target(target_str);
-    if (!maybe_target.has_value()) {
-        return make_parse_stop(status_type::BAD_REQUEST);
-    }
+                output.target = std::move(maybe_target).value();
+                return make_parse_more(state_start_line_request{ state_start_line_request_version{} }, target_offset);
+            },
+            [&](state_start_line_request_version) {
+                constexpr std::size_t version_max_length = enum_max_str_length<version_type>();
 
-    output.target = std::move(maybe_target).value();
-    return make_parse_more(request_state_target{}, target_offset);
-}
+                const auto version_result = try_find(buffer, tokens::CRLF, version_max_length);
+                if (!version_result.has_value()) {
+                    const auto& version_err = version_result.error();
+                    if (version_err == find_err::MAX_SIZE_EXCEEDED) {
+                        return make_parse_stop(status_type::BAD_REQUEST);
+                    }
+                    DEBUG_ASSERT(version_err == find_err::NOT_FOUND);
+                    return make_parse_stop(s);
+                }
 
-// HTTP-version CRLF
-parse_result<meta::result<state, status_type>>
-    parse_part(message_type& output, request_state_target s, std::string_view buffer) {
-    constexpr std::size_t version_max_length = enum_max_str_length<version_type>();
+                const auto& [version_str, version_offset] = version_result.value();
+                const auto version = meta::enum_from_str<version_type>(version_str);
+                if (version == version_type::ENUM_END) {
+                    return make_parse_stop(status_type::BAD_REQUEST);
+                }
 
-    const auto version_result = try_find(buffer, tokens::CRLF, version_max_length);
-    if (!version_result.has_value()) {
-        const auto& version_err = version_result.error();
-        if (version_err == find_err::MAX_SIZE_EXCEEDED) {
-            return make_parse_stop(status_type::BAD_REQUEST);
-        }
-        DEBUG_ASSERT(version_err == find_err::NOT_FOUND);
-        return make_parse_stop(s);
-    }
-
-    const auto& [version_str, version_offset] = version_result.value();
-    const auto version = meta::enum_from_str<version_type>(version_str);
-    if (version == version_type::ENUM_END) {
-        return make_parse_stop(status_type::BAD_REQUEST);
-    }
-
-    output.version = version;
-    return make_parse_more(request_state_version{}, version_offset);
+                output.version = version;
+                return make_parse_more(state_fields{}, version_offset);
+            },
+        },
+        s
+    );
 }
 
 // *( field-line CRLF ) CRLF

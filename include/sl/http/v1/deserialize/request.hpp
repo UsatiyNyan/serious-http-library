@@ -40,10 +40,15 @@ exec::async_gen<message_chunk, io_result<message_result>>
 
 namespace detail {
 
-struct state_empty {};
-struct request_state_method {};
-struct request_state_target {};
-struct request_state_version {};
+struct state_start_line_request_method {};
+struct state_start_line_request_target {};
+struct state_start_line_request_version {};
+
+using state_start_line_request = std::variant< //
+    state_start_line_request_method,
+    state_start_line_request_target,
+    state_start_line_request_version>;
+
 struct state_fields {
     std::size_t consumed_bytes = 0;
 };
@@ -71,10 +76,7 @@ struct state_trailing_fields {
 struct state_complete {};
 
 using state = std::variant<
-    state_empty,
-    request_state_method,
-    request_state_target,
-    request_state_version,
+    state_start_line_request,
     state_fields,
     state_body,
     state_chunked_body,
@@ -105,13 +107,8 @@ inline parse_result<meta::result<state_chunked_body, status_type>>
 parse_result<meta::result<state, status_type>>
     parse_request(message_type& output, state s, std::span<const std::byte> byte_buffer, const config_type& config);
 
-parse_result<meta::result<state, status_type>> parse_part(message_type& output, state_empty s, std::string_view buffer);
-
 parse_result<meta::result<state, status_type>>
-    parse_part(message_type& output, request_state_method s, std::string_view buffer);
-
-parse_result<meta::result<state, status_type>>
-    parse_part(message_type& output, request_state_target s, std::string_view buffer);
+    parse_part(message_type& output, state_start_line_request s, std::string_view buffer);
 
 parse_result<meta::result<state, status_type>> parse_part(
     message_type& output,
