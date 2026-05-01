@@ -33,9 +33,7 @@ using start_line_type = std::variant<request_line_type, status_line_type>;
 struct message_type {
     fields_type fields; // can be empty
     body_type body; // can be empty
-    target_type target;
-    method_type method;
-    version_type version;
+    start_line_type start_line;
 };
 
 struct response_message {

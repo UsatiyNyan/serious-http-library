@@ -27,7 +27,9 @@ exec::async_gen<message_chunk, io_result<message_result>>
     request(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config) {
 
     detail::state s = detail::state_start_line_request{ detail::state_start_line_request_method{} };
-    message_type output;
+    message_type output{
+        .start_line = request_line_type{},
+    };
 
     const auto do_parse = [&](
                               auto get_buffer, auto cond, auto add_offset
@@ -156,6 +158,7 @@ parse_result<meta::result<state, status_type>>
 // method SP request-target SP HTTP-version CRLF
 parse_result<meta::result<state, status_type>>
     parse_part(message_type& output, state_start_line_request s, std::string_view buffer) {
+    DEBUG_ASSERT(std::holds_alternative<request_line_type>(output.start_line));
     return std::visit(
         meta::overloaded{
             [&](state_start_line_request_method) {
@@ -177,7 +180,7 @@ parse_result<meta::result<state, status_type>>
                     return make_parse_stop(status_type::BAD_REQUEST);
                 }
 
-                output.method = method;
+                std::get<request_line_type>(output.start_line).method = method;
                 return make_parse_more(state_start_line_request{ state_start_line_request_target{} }, method_offset);
             },
             [&](state_start_line_request_target) {
@@ -200,7 +203,7 @@ parse_result<meta::result<state, status_type>>
                     return make_parse_stop(status_type::BAD_REQUEST);
                 }
 
-                output.target = std::move(maybe_target).value();
+                std::get<request_line_type>(output.start_line).target = std::move(maybe_target).value();
                 return make_parse_more(state_start_line_request{ state_start_line_request_version{} }, target_offset);
             },
             [&](state_start_line_request_version) {
@@ -222,7 +225,7 @@ parse_result<meta::result<state, status_type>>
                     return make_parse_stop(status_type::BAD_REQUEST);
                 }
 
-                output.version = version;
+                std::get<request_line_type>(output.start_line).version = version;
                 return make_parse_more(state_fields{}, version_offset);
             },
         },
