@@ -28,9 +28,7 @@ using query_params = std::vector<std::pair<std::string, std::string>>;
 // e.g.: "/", "/path", "/path?key=value&foo=bar"
 struct origin_target_type {
     std::string path;       // percent-decoded absolute-path
-    std::string raw_path;   // original path (for reconstruction)
     query_params query;     // decoded query params
-    std::string raw_query;  // original query string (for reconstruction)
 };
 
 // absolute-form = absolute-URI
@@ -39,9 +37,7 @@ struct absolute_target_type {
     std::string scheme;     // "http" or "https"
     std::string authority;  // host[:port]
     std::string path;       // percent-decoded path
-    std::string raw_path;
     query_params query;
-    std::string raw_query;
 };
 
 // authority-form = host ":" port

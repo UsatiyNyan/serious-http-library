@@ -2,7 +2,7 @@
 // Created by usatiynyan.
 //
 
-#include "sl/http/v1/detail/target.hpp"
+#include "sl/http/v1/deserialize/target.hpp"
 
 #include <gtest/gtest.h>
 
@@ -24,9 +24,7 @@ TEST(DeserializeTarget, OriginFormRoot) {
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
     EXPECT_EQ(origin->path, "/");
-    EXPECT_EQ(origin->raw_path, "/");
     EXPECT_TRUE(origin->query.empty());
-    EXPECT_TRUE(origin->raw_query.empty());
 }
 
 TEST(DeserializeTarget, OriginFormWithPath) {
@@ -35,7 +33,6 @@ TEST(DeserializeTarget, OriginFormWithPath) {
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
     EXPECT_EQ(origin->path, "/api/users/123");
-    EXPECT_EQ(origin->raw_path, "/api/users/123");
     EXPECT_TRUE(origin->query.empty());
 }
 
@@ -45,8 +42,6 @@ TEST(DeserializeTarget, OriginFormWithQuery) {
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
     EXPECT_EQ(origin->path, "/search");
-    EXPECT_EQ(origin->raw_path, "/search");
-    EXPECT_EQ(origin->raw_query, "q=hello&page=1");
     ASSERT_EQ(origin->query.size(), 2);
     EXPECT_EQ(origin->query[0], std::make_pair(std::string{"q"}, std::string{"hello"}));
     EXPECT_EQ(origin->query[1], std::make_pair(std::string{"page"}, std::string{"1"}));
@@ -58,7 +53,6 @@ TEST(DeserializeTarget, OriginFormPercentDecoded) {
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
     EXPECT_EQ(origin->path, "/path with spaces");
-    EXPECT_EQ(origin->raw_path, "/path%20with%20spaces");
     ASSERT_EQ(origin->query.size(), 1);
     EXPECT_EQ(origin->query[0].first, "name");
     EXPECT_EQ(origin->query[0].second, "John Doe");
@@ -107,7 +101,6 @@ TEST(DeserializeTarget, AbsoluteFormHttp) {
     EXPECT_EQ(absolute->scheme, "http");
     EXPECT_EQ(absolute->authority, "example.com");
     EXPECT_EQ(absolute->path, "/path");
-    EXPECT_EQ(absolute->raw_path, "/path");
     ASSERT_EQ(absolute->query.size(), 1);
     EXPECT_EQ(absolute->query[0].first, "q");
 }

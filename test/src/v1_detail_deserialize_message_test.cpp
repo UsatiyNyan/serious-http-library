@@ -39,7 +39,7 @@ std::string_view get_origin_path(const target_type& t) {
     if (!origin) {
         throw std::runtime_error("Expected origin_target_type");
     }
-    return origin->raw_path;
+    return origin->path;
 }
 
 class DeserializeRequestTest : public ::testing::Test {
@@ -286,8 +286,6 @@ TEST_F(DeserializeRequestTest, ValidInputWithQueryParameters) {
     EXPECT_EQ(get_request_line(*result).method, method_type::GET);
     const auto* origin = std::get_if<origin_target_type>(&get_request_line(*result).target);
     ASSERT_NE(origin, nullptr);
-    EXPECT_EQ(origin->raw_path, "/search");
-    EXPECT_EQ(origin->raw_query, "q=test");
     ASSERT_EQ(origin->query.size(), 1);
     EXPECT_EQ(origin->query[0].first, "q");
     EXPECT_EQ(origin->query[0].second, "test");

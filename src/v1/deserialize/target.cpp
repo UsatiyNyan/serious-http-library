@@ -2,7 +2,7 @@
 // Created by usatiynyan.
 //
 
-#include "sl/http/v1/detail/target.hpp"
+#include "sl/http/v1/deserialize/target.hpp"
 #include "sl/http/v1/detail/percent_encoding.hpp"
 #include "sl/http/v1/detail/strings.hpp"
 
@@ -79,9 +79,7 @@ meta::maybe<origin_target_type> parse_origin_form(std::string_view target_str) {
 
     return origin_target_type{
         .path = std::move(maybe_path).value(),
-        .raw_path = std::string{ raw_path },
         .query = std::move(query),
-        .raw_query = std::string{ raw_query },
     };
 }
 
@@ -135,9 +133,7 @@ meta::maybe<absolute_target_type> parse_absolute_form(std::string_view target_st
         .scheme = std::move(scheme),
         .authority = std::string{ authority },
         .path = std::move(maybe_path).value(),
-        .raw_path = std::move(raw_path),
         .query = std::move(query),
-        .raw_query = std::string{ raw_query },
     };
 }
 
