@@ -23,25 +23,17 @@ struct request_line_type {
     method_type method;
     version_type version;
 };
-struct status_line_type {
+struct response_line_type {
     reason_type reason; // can be empty
     status_type status;
     version_type version;
 };
-using start_line_type = std::variant<request_line_type, status_line_type>;
+using start_line_type = std::variant<request_line_type, response_line_type>;
 
 struct message_type {
     fields_type fields; // can be empty
     body_type body; // can be empty
     start_line_type start_line;
-};
-
-struct response_message {
-    fields_type fields; // can be empty
-    body_type body; // can be empty
-    reason_type reason; // can be empty
-    status_type status;
-    version_type version;
 };
 
 } // namespace sl::http::v1
