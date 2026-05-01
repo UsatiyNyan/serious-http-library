@@ -2,7 +2,7 @@
 // Created by usatiynyan.
 //
 
-#include "sl/http/v1/deserialize/request.hpp"
+#include "sl/http/v1/deserialize.hpp"
 #include "sl/http/v1/detail/strings.hpp"
 
 #include <gtest/gtest.h>

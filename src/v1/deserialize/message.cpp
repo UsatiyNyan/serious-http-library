@@ -10,7 +10,7 @@
 // request-line   = method SP request-target SP HTTP-version
 //
 
-#include "sl/http/v1/deserialize/request.hpp"
+#include "sl/http/v1/deserialize/message.hpp"
 
 #include "sl/http/v1/detail/strings.hpp"
 #include "sl/http/v1/detail/target.hpp"
