@@ -13,7 +13,7 @@
 #include <span>
 #include <vector>
 
-namespace sl::http::v1::deserialize::detail {
+namespace sl::http::v1::detail {
 
 template <typename AllocT = std::allocator<std::byte>>
 struct remainder_buffer {
@@ -49,6 +49,12 @@ private:
     buffer_type buffer_{};
     std::size_t offset_ = 0;
 };
+
+} // namespace sl::http::v1::detail
+
+namespace sl::http::v1::deserialize::detail {
+
+using v1::detail::remainder_buffer;
 
 template <typename T>
 struct parse_result {
