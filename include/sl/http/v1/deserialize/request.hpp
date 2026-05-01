@@ -27,6 +27,7 @@ using message_result = meta::result<message_type, status_type>;
 struct config_type {
     std::size_t max_body_size = 1 * 1024 * 1024; // 1 MiB default
     std::size_t max_field_size = 80 * 1024; // 80 KiB default
+    std::size_t max_reason_size = 8000; // recommended as per RFC 9112
 };
 
 struct message_chunk {
@@ -38,16 +39,28 @@ struct message_chunk {
 exec::async_gen<message_chunk, io_result<message_result>>
     request(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config = {});
 
+exec::async_gen<message_chunk, io_result<message_result>>
+    response(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config = {});
+
 namespace detail {
 
 struct state_start_line_request_method {};
 struct state_start_line_request_target {};
 struct state_start_line_request_version {};
-
 using state_start_line_request = std::variant< //
     state_start_line_request_method,
     state_start_line_request_target,
     state_start_line_request_version>;
+
+struct state_start_line_response_version {};
+struct state_start_line_response_status {};
+struct state_start_line_response_reason {};
+using state_start_line_response = std::variant< //
+    state_start_line_response_version,
+    state_start_line_response_status,
+    state_start_line_response_reason>;
+
+using state_start_line = std::variant<state_start_line_request, state_start_line_response>;
 
 struct state_fields {
     std::size_t consumed_bytes = 0;
@@ -75,8 +88,8 @@ struct state_trailing_fields {
 };
 struct state_complete {};
 
-using state = std::variant<
-    state_start_line_request,
+using state = std::variant< //
+    state_start_line,
     state_fields,
     state_body,
     state_chunked_body,
@@ -104,11 +117,20 @@ inline parse_result<meta::result<state_chunked_body, status_type>>
     return parse_result<meta::result<state_chunked_body, status_type>>::more(s, offset);
 }
 
-parse_result<meta::result<state, status_type>>
-    parse_request(message_type& output, state s, std::span<const std::byte> byte_buffer, const config_type& config);
+exec::async_gen<message_chunk, io_result<message_result>> parse_message_machine(
+    message_type output,
+    state s,
+    exec::async_gen<std::span<const std::byte>, std::error_code> input,
+    const config_type& config
+);
 
 parse_result<meta::result<state, status_type>>
-    parse_part(message_type& output, state_start_line_request s, std::string_view buffer);
+    parse_message(message_type& output, state s, std::span<const std::byte> byte_buffer, const config_type& config);
+
+parse_result<meta::result<state, status_type>>
+    parse_part(message_type& output, state_start_line_request s, std::string_view buffer, const config_type& config);
+parse_result<meta::result<state, status_type>>
+    parse_part(message_type& output, state_start_line_response s, std::string_view buffer, const config_type& config);
 
 parse_result<meta::result<state, status_type>> parse_part(
     message_type& output,

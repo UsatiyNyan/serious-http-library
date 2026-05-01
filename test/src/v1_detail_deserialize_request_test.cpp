@@ -205,7 +205,8 @@ TEST_F(DeserializeRequestTest, TransferEncodingNoSpaceAfterComma) {
     std::vector<std::byte> chunks_buffer;
     auto result = drain(
         request(full(
-            "POST /upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: gzip,chunked\r\n\r\n5\r\nHello\r\n0\r\n\r\n"
+            "POST /upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: "
+            "gzip,chunked\r\n\r\n5\r\nHello\r\n0\r\n\r\n"
         )),
         &chunks_buffer
     );
@@ -222,7 +223,8 @@ TEST_F(DeserializeRequestTest, TransferEncodingExtraWhitespace) {
     std::vector<std::byte> chunks_buffer;
     auto result = drain(
         request(full(
-            "POST /upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding:  gzip ,  chunked \r\n\r\n5\r\nHello\r\n0\r\n\r\n"
+            "POST /upload HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding:  gzip ,  chunked "
+            "\r\n\r\n5\r\nHello\r\n0\r\n\r\n"
         )),
         &chunks_buffer
     );
@@ -245,9 +247,11 @@ TEST_F(DeserializeRequestTest, InvalidInputWithMissingHeaders) {
 
 TEST_F(DeserializeRequestTest, ValidInputWithLongBody) {
     std::string long_body(1000, 'a');
-    auto result = drain(request(full(fmt::format(
-        "POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: {}\r\n\r\n{}", long_body.size(), long_body
-    ))));
+    auto result = drain(request(full(
+        fmt::format(
+            "POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: {}\r\n\r\n{}", long_body.size(), long_body
+        )
+    )));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(get_request_line(*result).method, method_type::POST);
     EXPECT_EQ(get_origin_path(get_request_line(*result).target), "/submit");
@@ -297,12 +301,13 @@ TEST_F(DeserializeRequestTest, ValidInputWithCustomMethod) {
 }
 
 TEST_F(DeserializeRequestTest, ValidInputWithTrailingFields) {
-    auto result =
-        drain(request(full("POST /submit HTTP/1.1\r\n"
-                           "Host: example.com\r\n"
-                           "Transfer-Encoding: chunked\r\n\r\n"
-                           "5\r\nHello\r\n0\r\n"
-                           "Trailer-Header: value\r\n\r\n")));
+    auto result = drain(request(full(
+        "POST /submit HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n"
+        "5\r\nHello\r\n0\r\n"
+        "Trailer-Header: value\r\n\r\n"
+    )));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(get_request_line(*result).method, method_type::POST);
     EXPECT_EQ(get_origin_path(get_request_line(*result).target), "/submit");
@@ -312,12 +317,13 @@ TEST_F(DeserializeRequestTest, ValidInputWithTrailingFields) {
 }
 
 TEST_F(DeserializeRequestTest, OneByOneInputWithTrailingFields) {
-    auto result =
-        drain(request(one_by_one("POST /submit HTTP/1.1\r\n"
-                                 "Host: example.com\r\n"
-                                 "Transfer-Encoding: chunked\r\n\r\n"
-                                 "5\r\nHello\r\n0\r\n"
-                                 "Trailer-Header: value\r\n\r\n")));
+    auto result = drain(request(one_by_one(
+        "POST /submit HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n"
+        "5\r\nHello\r\n0\r\n"
+        "Trailer-Header: value\r\n\r\n"
+    )));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(get_request_line(*result).method, method_type::POST);
     EXPECT_EQ(get_origin_path(get_request_line(*result).target), "/submit");
@@ -330,10 +336,12 @@ TEST_F(DeserializeRequestTest, ValidInputWithChunkExtensions) {
     std::vector<std::byte> chunks_buffer;
     std::vector<std::string> chunk_ext_buffer;
     auto result = drain(
-        request(full("POST /upload HTTP/1.1\r\n"
-                     "Host: example.com\r\n"
-                     "Transfer-Encoding: chunked\r\n\r\n"
-                     "5;ext=value\r\nHello\r\n0\r\n\r\n")),
+        request(full(
+            "POST /upload HTTP/1.1\r\n"
+            "Host: example.com\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n"
+            "5;ext=value\r\nHello\r\n0\r\n\r\n"
+        )),
         &chunks_buffer,
         &chunk_ext_buffer
     );
@@ -350,10 +358,12 @@ TEST_F(DeserializeRequestTest, OneByOneInputWithChunkExtensions) {
     std::vector<std::byte> chunks_buffer;
     std::vector<std::string> chunk_ext_buffer;
     auto result = drain(
-        request(one_by_one("POST /upload HTTP/1.1\r\n"
-                           "Host: example.com\r\n"
-                           "Transfer-Encoding: chunked\r\n\r\n"
-                           "5;ext=value\r\nHello\r\n0\r\n\r\n")),
+        request(one_by_one(
+            "POST /upload HTTP/1.1\r\n"
+            "Host: example.com\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n"
+            "5;ext=value\r\nHello\r\n0\r\n\r\n"
+        )),
         &chunks_buffer,
         &chunk_ext_buffer
     );
@@ -367,7 +377,8 @@ TEST_F(DeserializeRequestTest, OneByOneInputWithChunkExtensions) {
 }
 
 TEST_F(DeserializeRequestTest, CaseInsensitiveHeaders) {
-    auto result = drain(request(full("GET / HTTP/1.1\r\nHOST: example.com\r\nUser-Agent: Test\r\naccept: */*\r\n\r\n")));
+    auto result =
+        drain(request(full("GET / HTTP/1.1\r\nHOST: example.com\r\nUser-Agent: Test\r\naccept: */*\r\n\r\n")));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->fields["host"], "example.com");
     EXPECT_EQ(result->fields["user-agent"], "Test");
@@ -375,16 +386,19 @@ TEST_F(DeserializeRequestTest, CaseInsensitiveHeaders) {
 }
 
 TEST_F(DeserializeRequestTest, DuplicateHeadersCombined) {
-    auto result =
-        drain(request(full("GET / HTTP/1.1\r\nHost: example.com\r\nAccept: text/html\r\nAccept: application/json\r\n\r\n")));
+    auto result = drain(
+        request(full("GET / HTTP/1.1\r\nHost: example.com\r\nAccept: text/html\r\nAccept: application/json\r\n\r\n"))
+    );
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->fields["host"], "example.com");
     EXPECT_EQ(result->fields["accept"], "text/html, application/json");
 }
 
 TEST_F(DeserializeRequestTest, DuplicateHeadersCombinedCaseInsensitive) {
-    auto result =
-        drain(request(full("GET / HTTP/1.1\r\nHost: example.com\r\nACCEPT: text/html\r\naccept: application/json\r\nAccept: text/plain\r\n\r\n")));
+    auto result = drain(request(full(
+        "GET / HTTP/1.1\r\nHost: example.com\r\nACCEPT: text/html\r\naccept: application/json\r\nAccept: "
+        "text/plain\r\n\r\n"
+    )));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->fields["host"], "example.com");
     EXPECT_EQ(result->fields["accept"], "text/html, application/json, text/plain");
@@ -393,20 +407,17 @@ TEST_F(DeserializeRequestTest, DuplicateHeadersCombinedCaseInsensitive) {
 TEST_F(DeserializeRequestTest, ContentLengthExceedsMaxBodySize) {
     // Use small max_body_size to test DoS protection
     config_type config{ .max_body_size = 10 };
-    auto result = drain(request(
-        full("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 100\r\n\r\n"),
-        config
-    ));
+    auto result =
+        drain(request(full("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 100\r\n\r\n"), config));
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), drain_error(status_type::CONTENT_TOO_LARGE));
 }
 
 TEST_F(DeserializeRequestTest, ContentLengthWithinMaxBodySize) {
     config_type config{ .max_body_size = 100 };
-    auto result = drain(request(
-        full("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\nHello, World!"),
-        config
-    ));
+    auto result = drain(
+        request(full("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\nHello, World!"), config)
+    );
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->body, detail::buffer_str_to_byte("Hello, World!"));
 }
@@ -415,7 +426,7 @@ TEST_F(DeserializeRequestTest, PipelinedRequestsWithTrailingFields) {
     // Test: pipelined requests where first has trailing fields.
     // Single generator yields bytes one-by-one, shared position tracks consumption.
     //
-    // Note: offset bug in detail::parse_request (returning 0 instead of 2 for
+    // Note: offset bug in detail::parse_message (returning 0 instead of 2 for
     // trailing fields CRLF) doesn't manifest here because each request() owns
     // its remainder_buffer. Generator position tracks actual pulled bytes, which
     // is correct. Bug only affects internal remainder_buffer offset accounting.
@@ -438,8 +449,7 @@ TEST_F(DeserializeRequestTest, PipelinedRequestsWithTrailingFields) {
     const std::string pipelined = req1 + req2;
 
     std::vector<std::byte> input_bytes(
-        detail::buffer_str_to_byte(pipelined).begin(),
-        detail::buffer_str_to_byte(pipelined).end()
+        detail::buffer_str_to_byte(pipelined).begin(), detail::buffer_str_to_byte(pipelined).end()
     );
 
     // Shared position - tracks actual bytes consumed
@@ -477,7 +487,7 @@ TEST_F(DeserializeRequestTest, PipelinedRequestsWithTrailingFields) {
 }
 
 TEST_F(DeserializeRequestTest, TrailingFieldsCRLFOffset) {
-    // Direct test of detail::parse_request offset when trailing fields end.
+    // Direct test of detail::parse_message offset when trailing fields end.
     // When empty field line (CRLF) detected in trailing_fields state,
     // returned offset must be 2 to consume the CRLF bytes.
     //
@@ -494,7 +504,7 @@ TEST_F(DeserializeRequestTest, TrailingFieldsCRLFOffset) {
     const std::string_view input = "\r\nGET / HTTP/1.1\r\n"; // CRLF + next request
     const auto buffer = detail::buffer_str_to_byte(input);
 
-    const auto [result, offset] = detail::parse_request(output, state, buffer, config);
+    const auto [result, offset] = detail::parse_message(output, state, buffer, config);
 
     ASSERT_TRUE(result.has_value()) << "Should parse successfully";
     EXPECT_TRUE(std::holds_alternative<detail::state_complete>(result.value()))
@@ -515,8 +525,7 @@ TEST_F(DeserializeRequestTest, PipelinedSimpleRequests) {
         "GET /second HTTP/1.1\r\nHost: example.com\r\n\r\n";
 
     std::vector<std::byte> input_bytes(
-        detail::buffer_str_to_byte(pipelined).begin(),
-        detail::buffer_str_to_byte(pipelined).end()
+        detail::buffer_str_to_byte(pipelined).begin(), detail::buffer_str_to_byte(pipelined).end()
     );
 
     std::size_t pos = 0;
@@ -548,8 +557,7 @@ TEST_F(DeserializeRequestTest, PipelinedWithContentLength) {
         "GET /next HTTP/1.1\r\nHost: example.com\r\n\r\n";
 
     std::vector<std::byte> input_bytes(
-        detail::buffer_str_to_byte(pipelined).begin(),
-        detail::buffer_str_to_byte(pipelined).end()
+        detail::buffer_str_to_byte(pipelined).begin(), detail::buffer_str_to_byte(pipelined).end()
     );
 
     std::size_t pos = 0;
@@ -583,8 +591,7 @@ TEST_F(DeserializeRequestTest, PipelinedWithChunkedNoTrailers) {
         "GET /done HTTP/1.1\r\nHost: example.com\r\n\r\n";
 
     std::vector<std::byte> input_bytes(
-        detail::buffer_str_to_byte(pipelined).begin(),
-        detail::buffer_str_to_byte(pipelined).end()
+        detail::buffer_str_to_byte(pipelined).begin(), detail::buffer_str_to_byte(pipelined).end()
     );
 
     std::size_t pos = 0;
@@ -619,8 +626,7 @@ TEST_F(DeserializeRequestTest, PipelinedThreeRequests) {
         "GET /three HTTP/1.1\r\nHost: c.com\r\n\r\n";
 
     std::vector<std::byte> input_bytes(
-        detail::buffer_str_to_byte(pipelined).begin(),
-        detail::buffer_str_to_byte(pipelined).end()
+        detail::buffer_str_to_byte(pipelined).begin(), detail::buffer_str_to_byte(pipelined).end()
     );
 
     std::size_t pos = 0;
@@ -658,8 +664,7 @@ TEST_F(DeserializeRequestTest, PipelinedFullBuffer) {
     const std::string pipelined = req1 + req2;
 
     std::vector<std::byte> input_bytes(
-        detail::buffer_str_to_byte(pipelined).begin(),
-        detail::buffer_str_to_byte(pipelined).end()
+        detail::buffer_str_to_byte(pipelined).begin(), detail::buffer_str_to_byte(pipelined).end()
     );
 
     bool yielded = false;
@@ -696,8 +701,7 @@ TEST_F(DeserializeRequestTest, PipelinedMixedBodies) {
         "POST /chunked HTTP/1.1\r\nHost: c\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nXY\r\n0\r\n\r\n";
 
     std::vector<std::byte> input_bytes(
-        detail::buffer_str_to_byte(pipelined).begin(),
-        detail::buffer_str_to_byte(pipelined).end()
+        detail::buffer_str_to_byte(pipelined).begin(), detail::buffer_str_to_byte(pipelined).end()
     );
 
     std::size_t pos = 0;
@@ -729,6 +733,210 @@ TEST_F(DeserializeRequestTest, PipelinedMixedBodies) {
     EXPECT_EQ(chunks, detail::buffer_str_to_byte("XY"));
 
     EXPECT_EQ(pos, pipelined.size());
+}
+
+// === Response Deserialization Tests ===
+
+// Helper to extract response_line from message
+const response_line_type& get_response_line(const message_type& msg) {
+    const auto* res = std::get_if<response_line_type>(&msg.start_line);
+    if (!res) {
+        throw std::runtime_error("Expected response_line_type");
+    }
+    return *res;
+}
+
+class DeserializeResponseTest : public DeserializeRequestTest {};
+
+TEST_F(DeserializeResponseTest, EmptyInput) {
+    auto result = drain(response(full("")));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), drain_error(std::error_code{}));
+}
+
+TEST_F(DeserializeResponseTest, ValidInput200) {
+    auto result = drain(response(full("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).version, version_type::HTTPv1_1);
+    EXPECT_EQ(get_response_line(*result).status, status_type::OK);
+    EXPECT_EQ(get_response_line(*result).reason, "OK");
+}
+
+TEST_F(DeserializeResponseTest, ValidInput404) {
+    auto result = drain(response(full("HTTP/1.1 404 Not Found\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).version, version_type::HTTPv1_1);
+    EXPECT_EQ(get_response_line(*result).status, status_type::NOT_FOUND);
+    EXPECT_EQ(get_response_line(*result).reason, "Not Found");
+}
+
+TEST_F(DeserializeResponseTest, ValidInput500) {
+    auto result = drain(response(full("HTTP/1.1 500 Internal Server Error\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).version, version_type::HTTPv1_1);
+    EXPECT_EQ(get_response_line(*result).status, status_type::INTERNAL_SERVER_ERROR);
+    EXPECT_EQ(get_response_line(*result).reason, "Internal Server Error");
+}
+
+TEST_F(DeserializeResponseTest, HTTP10Version) {
+    auto result = drain(response(full("HTTP/1.0 200 OK\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).version, version_type::HTTPv1_0);
+    EXPECT_EQ(get_response_line(*result).status, status_type::OK);
+}
+
+TEST_F(DeserializeResponseTest, EmptyReasonPhrase) {
+    // RFC 9112: reason-phrase can be empty
+    auto result = drain(response(full("HTTP/1.1 200 \r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).status, status_type::OK);
+    EXPECT_EQ(get_response_line(*result).reason, "");
+}
+
+TEST_F(DeserializeResponseTest, InvalidVersion) {
+    auto result = drain(response(full("HTTP/2.0 200 OK\r\n\r\n")));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), drain_error(status_type::BAD_REQUEST));
+}
+
+TEST_F(DeserializeResponseTest, InvalidStatusCode) {
+    auto result = drain(response(full("HTTP/1.1 ABC OK\r\n\r\n")));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), drain_error(status_type::BAD_REQUEST));
+}
+
+TEST_F(DeserializeResponseTest, StatusCodeTooShort) {
+    auto result = drain(response(full("HTTP/1.1 20 OK\r\n\r\n")));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), drain_error(status_type::BAD_REQUEST));
+}
+
+TEST_F(DeserializeResponseTest, ValidInputWithBody) {
+    auto result = drain(response(full("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).status, status_type::OK);
+    EXPECT_EQ(result->body, detail::buffer_str_to_byte("Hello, World!"));
+}
+
+TEST_F(DeserializeResponseTest, ValidInputWithHeaders) {
+    auto result = drain(response(full(
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/html\r\n"
+        "Server: TestServer\r\n"
+        "\r\n"
+    )));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->fields["content-type"], "text/html");
+    EXPECT_EQ(result->fields["server"], "TestServer");
+}
+
+TEST_F(DeserializeResponseTest, OneByOneInput) {
+    auto result = drain(response(one_by_one("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).version, version_type::HTTPv1_1);
+    EXPECT_EQ(get_response_line(*result).status, status_type::OK);
+    EXPECT_EQ(get_response_line(*result).reason, "OK");
+}
+
+TEST_F(DeserializeResponseTest, OneByOneInputWithBody) {
+    auto result = drain(response(one_by_one("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nHello")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).status, status_type::OK);
+    EXPECT_EQ(result->body, detail::buffer_str_to_byte("Hello"));
+}
+
+TEST_F(DeserializeResponseTest, ChunkedBody) {
+    std::vector<std::byte> chunks_buffer;
+    auto result = drain(
+        response(full(
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n"
+            "5\r\nHello\r\n"
+            "6\r\n World\r\n"
+            "0\r\n\r\n"
+        )),
+        &chunks_buffer
+    );
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).status, status_type::OK);
+    EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello World"));
+}
+
+TEST_F(DeserializeResponseTest, ChunkedBodyOneByOne) {
+    std::vector<std::byte> chunks_buffer;
+    auto result = drain(
+        response(one_by_one(
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n"
+            "5\r\nHello\r\n"
+            "0\r\n\r\n"
+        )),
+        &chunks_buffer
+    );
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).status, status_type::OK);
+    EXPECT_EQ(chunks_buffer, detail::buffer_str_to_byte("Hello"));
+}
+
+TEST_F(DeserializeResponseTest, ChunkedWithTrailingFields) {
+    auto result = drain(response(full(
+        "HTTP/1.1 200 OK\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n"
+        "5\r\nHello\r\n"
+        "0\r\n"
+        "X-Checksum: abc123\r\n"
+        "\r\n"
+    )));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->fields["x-checksum"], "abc123");
+}
+
+TEST_F(DeserializeResponseTest, UnknownStatusCode) {
+    // Non-standard status code (e.g., 299) should still parse
+    auto result = drain(response(full("HTTP/1.1 299 Custom Status\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(static_cast<std::uint16_t>(get_response_line(*result).status), 299);
+    EXPECT_EQ(get_response_line(*result).reason, "Custom Status");
+}
+
+TEST_F(DeserializeResponseTest, ReasonPhraseMaxLength) {
+    // Test config.max_reason_size enforcement
+    config_type config{ .max_reason_size = 10 };
+    auto result = drain(response(full("HTTP/1.1 200 This reason phrase is way too long\r\n\r\n"), config));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), drain_error(status_type::BAD_REQUEST));
+}
+
+TEST_F(DeserializeResponseTest, ReasonPhraseWithinLimit) {
+    config_type config{ .max_reason_size = 100 };
+    auto result = drain(response(full("HTTP/1.1 200 OK\r\n\r\n"), config));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).reason, "OK");
+}
+
+TEST_F(DeserializeResponseTest, Continue100) {
+    auto result = drain(response(full("HTTP/1.1 100 Continue\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).status, status_type::CONTINUE);
+    EXPECT_EQ(get_response_line(*result).reason, "Continue");
+}
+
+TEST_F(DeserializeResponseTest, NoContent204) {
+    auto result = drain(response(full("HTTP/1.1 204 No Content\r\n\r\n")));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).status, status_type::NO_CONTENT);
+    EXPECT_TRUE(result->body.empty());
+}
+
+TEST_F(DeserializeResponseTest, Redirect301) {
+    auto result = drain(response(full(
+        "HTTP/1.1 301 Moved Permanently\r\n"
+        "Location: https://example.com/new\r\n"
+        "\r\n"
+    )));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(get_response_line(*result).status, status_type::MOVED_PERMANENTLY);
+    EXPECT_EQ(result->fields["location"], "https://example.com/new");
 }
 
 } // namespace sl::http::v1::deserialize

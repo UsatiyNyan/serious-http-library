@@ -16,7 +16,7 @@
 namespace sl::http::v1 {
 
 using body_type = std::vector<std::byte>;
-using reason_type = std::string_view;
+using reason_type = std::string;
 
 struct request_line_type {
     target_type target;

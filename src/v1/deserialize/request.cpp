@@ -25,19 +25,39 @@ namespace sl::http::v1::deserialize {
 
 exec::async_gen<message_chunk, io_result<message_result>>
     request(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config) {
+    return detail::parse_message_machine(
+        message_type{ .start_line = request_line_type{} },
+        detail::state_start_line{ detail::state_start_line_request{ detail::state_start_line_request_method{} } },
+        std::move(input),
+        config
+    );
+}
 
-    detail::state s = detail::state_start_line_request{ detail::state_start_line_request_method{} };
-    message_type output{
-        .start_line = request_line_type{},
-    };
+exec::async_gen<message_chunk, io_result<message_result>>
+    response(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config) {
+    return detail::parse_message_machine(
+        message_type{ .start_line = response_line_type{} },
+        detail::state_start_line{ detail::state_start_line_response{ detail::state_start_line_response_version{} } },
+        std::move(input),
+        config
+    );
+}
 
+namespace detail {
+
+exec::async_gen<message_chunk, io_result<message_result>> parse_message_machine(
+    message_type output,
+    state s,
+    exec::async_gen<std::span<const std::byte>, std::error_code> input,
+    const config_type& config
+) {
     const auto do_parse = [&](
                               auto get_buffer, auto cond, auto add_offset
                           ) -> exec::async_gen<message_chunk, meta::result<meta::unit, status_type>> {
         while (cond()) {
             auto* const chunked_state = std::get_if<detail::state_chunked_body>(&s);
             if (chunked_state == nullptr) {
-                const auto [new_state_or_err, offset] = detail::parse_request(output, s, get_buffer(), config);
+                const auto [new_state_or_err, offset] = detail::parse_message(output, s, get_buffer(), config);
 
                 if (!new_state_or_err.has_value()) {
                     co_return meta::err(new_state_or_err.error());
@@ -136,10 +156,8 @@ exec::async_gen<message_chunk, io_result<message_result>>
     co_return meta::err(std::move(input).result_or_throw());
 }
 
-namespace detail {
-
 parse_result<meta::result<state, status_type>>
-    parse_request(message_type& output, state s, std::span<const std::byte> byte_buffer, const config_type& config) {
+    parse_message(message_type& output, state s, std::span<const std::byte> byte_buffer, const config_type& config) {
     const auto str_buffer = buffer_byte_to_str(byte_buffer);
 
     return std::visit(
@@ -149,6 +167,9 @@ parse_result<meta::result<state, status_type>>
             [&](state_body a_s) { return parse_part(output, a_s, byte_buffer); },
             [&](state_fields a_s) { return parse_part(output, a_s, str_buffer, config); },
             [&](state_trailing_fields a_s) { return parse_part(output, a_s, str_buffer, config); },
+            [&](state_start_line a_s) {
+                return std::visit([&](auto a_a_s) { return parse_part(output, a_a_s, str_buffer, config); }, a_s);
+            },
             [&](auto a_s) { return parse_part(output, a_s, str_buffer); },
         },
         s
@@ -157,7 +178,7 @@ parse_result<meta::result<state, status_type>>
 
 // method SP request-target SP HTTP-version CRLF
 parse_result<meta::result<state, status_type>>
-    parse_part(message_type& output, state_start_line_request s, std::string_view buffer) {
+    parse_part(message_type& output, state_start_line_request s, std::string_view buffer, const config_type&) {
     DEBUG_ASSERT(std::holds_alternative<request_line_type>(output.start_line));
     return std::visit(
         meta::overloaded{
@@ -227,6 +248,81 @@ parse_result<meta::result<state, status_type>>
 
                 std::get<request_line_type>(output.start_line).version = version;
                 return make_parse_more(state_fields{}, version_offset);
+            },
+        },
+        s
+    );
+}
+
+// HTTP-version SP status-code SP [ reason-phrase ] CRLF
+parse_result<meta::result<state, status_type>>
+    parse_part(message_type& output, state_start_line_response s, std::string_view buffer, const config_type& config) {
+    DEBUG_ASSERT(std::holds_alternative<response_line_type>(output.start_line));
+    return std::visit(
+        meta::overloaded{
+            [&](state_start_line_response_version) {
+                constexpr std::size_t version_max_length = enum_max_str_length<version_type>();
+
+                const auto version_result = try_find(buffer, tokens::SP, version_max_length);
+                if (!version_result.has_value()) {
+                    const auto& version_err = version_result.error();
+                    if (version_err == find_err::MAX_SIZE_EXCEEDED) {
+                        return make_parse_stop(status_type::BAD_REQUEST);
+                    }
+                    DEBUG_ASSERT(version_err == find_err::NOT_FOUND);
+                    return make_parse_stop(s);
+                }
+
+                const auto& [version_str, version_offset] = version_result.value();
+                const auto version = meta::enum_from_str<version_type>(version_str);
+                if (version == version_type::ENUM_END) {
+                    return make_parse_stop(status_type::BAD_REQUEST);
+                }
+
+                std::get<response_line_type>(output.start_line).version = version;
+                return make_parse_more(state_start_line_response{ state_start_line_response_status{} }, version_offset);
+            },
+            [&](state_start_line_response_status) {
+                constexpr std::size_t status_code_length = 3;
+
+                const auto status_result = try_find(buffer, tokens::SP, status_code_length);
+                if (!status_result.has_value()) {
+                    const auto& status_err = status_result.error();
+                    if (status_err == find_err::MAX_SIZE_EXCEEDED) {
+                        return make_parse_stop(status_type::BAD_REQUEST);
+                    }
+                    DEBUG_ASSERT(status_err == find_err::NOT_FOUND);
+                    return make_parse_stop(s);
+                }
+
+                const auto& [status_str, status_offset] = status_result.value();
+                if (status_str.size() != status_code_length) {
+                    return make_parse_stop(status_type::BAD_REQUEST);
+                }
+
+                std::uint16_t status_code = 0;
+                const auto conv_result = std::from_chars(status_str.begin(), status_str.end(), status_code);
+                if (conv_result.ec != std::error_code{} || conv_result.ptr != status_str.end()) {
+                    return make_parse_stop(status_type::BAD_REQUEST);
+                }
+
+                std::get<response_line_type>(output.start_line).status = static_cast<status_type>(status_code);
+                return make_parse_more(state_start_line_response{ state_start_line_response_reason{} }, status_offset);
+            },
+            [&](state_start_line_response_reason) {
+                const auto reason_result = try_find(buffer, tokens::CRLF, config.max_reason_size);
+                if (!reason_result.has_value()) {
+                    const auto& reason_err = reason_result.error();
+                    if (reason_err == find_err::MAX_SIZE_EXCEEDED) {
+                        return make_parse_stop(status_type::BAD_REQUEST);
+                    }
+                    DEBUG_ASSERT(reason_err == find_err::NOT_FOUND);
+                    return make_parse_stop(s);
+                }
+
+                const auto& [reason_str, reason_offset] = reason_result.value();
+                std::get<response_line_type>(output.start_line).reason = reason_str;
+                return make_parse_more(state_fields{}, reason_offset);
             },
         },
         s
