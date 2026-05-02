@@ -37,10 +37,10 @@ struct message_chunk {
 };
 
 exec::async_gen<message_chunk, io_result<message_result>>
-    request(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config = {});
+    request(exec::async_gen<std::span<const std::byte>, std::error_code> input, config_type config = {});
 
 exec::async_gen<message_chunk, io_result<message_result>>
-    response(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config = {});
+    response(exec::async_gen<std::span<const std::byte>, std::error_code> input, config_type config = {});
 
 namespace detail {
 
@@ -121,7 +121,7 @@ exec::async_gen<message_chunk, io_result<message_result>> parse_message_machine(
     message_type output,
     state s,
     exec::async_gen<std::span<const std::byte>, std::error_code> input,
-    const config_type& config
+    config_type config
 );
 
 parse_result<meta::result<state, status_type>>

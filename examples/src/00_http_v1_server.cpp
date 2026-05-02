@@ -3,7 +3,11 @@
 //
 
 #include "sl/http.hpp"
+#include "sl/http/v1/detail/strings.hpp"
+#include "sl/http/v1/types.hpp"
 
+#include <fmt/base.h>
+#include <fmt/format.h>
 #include <sl/exec.hpp>
 #include <sl/exec/algo/sched/manual.hpp>
 #include <sl/exec/coro/async.hpp>
@@ -12,8 +16,79 @@
 
 #include <sl/io/async/socket.hpp>
 #include <sl/meta/assert.hpp>
+#include <sl/meta/enum/to_string.hpp>
+#include <sl/meta/match/overloaded.hpp>
 
 namespace sl {
+
+std::atomic<std::size_t> request_counter = 0;
+
+std::string format_query(const http::v1::query_params& query) {
+    if (query.empty()) {
+        return "";
+    }
+    std::string result = "?";
+    for (std::size_t i = 0; i < query.size(); ++i) {
+        if (i > 0) {
+            result += "&";
+        }
+        result += fmt::format("{}={}", query[i].first, query[i].second);
+    }
+    return result;
+}
+
+std::string format_target(const http::v1::target_type& target) {
+    return std::visit(
+        meta::overloaded{
+            [](const http::v1::origin_target_type& t) { return fmt::format("{}{}", t.path, format_query(t.query)); },
+            [](const http::v1::absolute_target_type& t) {
+                return fmt::format("{}://{}{}{}", t.scheme, t.authority, t.path, format_query(t.query));
+            },
+            [](const http::v1::authority_target_type& t) { return fmt::format("{}:{}", t.host, t.port); },
+            [](const http::v1::asterisk_target_type&) { return std::string{ "*" }; },
+        },
+        target
+    );
+}
+
+void debug_print(const http::v1::message_type& request) {
+    const auto& req = std::get<http::v1::request_line_type>(request.start_line);
+    fmt::println("=== Request #{} ===", request_counter.fetch_add(1));
+    fmt::println("{} {}", enum_to_str(req.method), format_target(req.target));
+    for (const auto& [name, value] : request.fields) {
+        fmt::println("{}: {}", name, value);
+    }
+    if (!request.body.empty()) {
+        fmt::println("\n{}", http::v1::detail::buffer_byte_to_str(request.body));
+    }
+    fmt::println("================");
+}
+
+http::v1::message_type handle(const http::v1::message_type& request) {
+    debug_print(request);
+
+    constexpr std::string_view body_str = "Hello, World!\n";
+
+    http::v1::body_type body{
+        std::bit_cast<const std::byte*>(body_str.data()),
+        std::bit_cast<const std::byte*>(body_str.data() + body_str.size()),
+    };
+
+    http::v1::fields_type fields;
+    fields["Content-Type"] = "text/plain";
+    fields["Content-Length"] = std::to_string(body.size());
+    fields["Connection"] = "keep-alive";
+
+    return http::v1::message_type{
+        .fields = std::move(fields),
+        .body = std::move(body),
+        .start_line =
+            http::v1::response_line_type{
+                .status = http::v1::status_type::OK,
+                .version = http::v1::version_type::HTTPv1_1,
+            },
+    };
+}
 
 exec::async_gen<std::span<const std::byte>, std::error_code>
     read_agen(sl::io::async::socket::bound& client, exec::executor& executor) {
@@ -46,21 +121,34 @@ exec::async<void> client_coro(
     meta::defer unbind_socket{ [&bound_socket_async] { ASSERT(std::move(bound_socket_async).unbind()); } };
     auto& client = bound_socket_async;
 
-    while (true) {
-        auto request_agen = http::v1::deserialize::request(read_agen(client, executor));
+    http::v1::deserialize::config_type config{};
+    for (std::size_t i = 0; i < 1; ++i) {
+        auto reader = read_agen(client);
+        auto request_agen = http::v1::deserialize::request(std::move(reader), config);
         while (auto request_chunk = co_await request_agen) {
+            fmt::println("chunk?");
             // TODO: handle chunks
         }
         auto io_result = std::move(request_agen).result_or_throw();
         if (!io_result.has_value()) {
+            if (io_result.error() == std::errc::connection_reset) {
+                break;
+            }
             PANIC("io:", io_result.error().message());
         }
         auto request_result = std::move(io_result).value();
         if (!request_result.has_value()) {
             PANIC("status:", static_cast<std::uint16_t>(request_result.error()));
         }
-        auto request = std::move(request_result).value();
-        // TODO: handle
+        const auto request = std::move(request_result).value();
+        const auto response = handle(request);
+        const auto serialize_result = co_await http::v1::serialize::message(response, client);
+        if (serialize_result.ec) {
+            if (serialize_result.ec == std::errc::connection_reset || serialize_result.ec == std::errc::broken_pipe) {
+                break;
+            }
+            PANIC("serialize:", serialize_result.ec.message());
+        }
     }
 }
 

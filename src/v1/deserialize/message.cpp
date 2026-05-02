@@ -24,7 +24,7 @@
 namespace sl::http::v1::deserialize {
 
 exec::async_gen<message_chunk, io_result<message_result>>
-    request(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config) {
+    request(exec::async_gen<std::span<const std::byte>, std::error_code> input, config_type config) {
     return detail::parse_message_machine(
         message_type{ .start_line = request_line_type{} },
         detail::state_start_line{ detail::state_start_line_request{ detail::state_start_line_request_method{} } },
@@ -34,7 +34,7 @@ exec::async_gen<message_chunk, io_result<message_result>>
 }
 
 exec::async_gen<message_chunk, io_result<message_result>>
-    response(exec::async_gen<std::span<const std::byte>, std::error_code> input, const config_type& config) {
+    response(exec::async_gen<std::span<const std::byte>, std::error_code> input, config_type config) {
     return detail::parse_message_machine(
         message_type{ .start_line = response_line_type{} },
         detail::state_start_line{ detail::state_start_line_response{ detail::state_start_line_response_version{} } },
@@ -49,7 +49,7 @@ exec::async_gen<message_chunk, io_result<message_result>> parse_message_machine(
     message_type output,
     state s,
     exec::async_gen<std::span<const std::byte>, std::error_code> input,
-    const config_type& config
+    config_type config
 ) {
     const auto do_parse = [&](
                               auto get_buffer, auto cond, auto add_offset

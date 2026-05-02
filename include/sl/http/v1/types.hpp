@@ -24,7 +24,7 @@ struct request_line_type {
     version_type version;
 };
 struct response_line_type {
-    reason_type reason; // can be empty
+    reason_type reason{}; // can be empty
     status_type status;
     version_type version;
 };
