@@ -1,15 +1,31 @@
 //
 // Created by usatiynyan.
 //
+// WARNING: This example has a use-after-free bug under concurrent load.
+// Root cause: read_agen() captures sync_client& by reference, but sync_client
+// holds references to stack-local data (bound_socket_async, executor).
+// When the generator is moved into deserialize::request(), the coroutine frame
+// still references data on client_coro's stack. Thread pool resumes different
+// coroutine pieces on different threads = UAF.
+//
+// Possible fixes:
+//   A) Use shared_ptr ownership in sync_client instead of references
+//   B) Replace async_gen with explicit state machine (no coroutine frame refs)
+//   C) Single-thread per connection (no cross-thread coroutine resume)
+//
 
 #include "sl/http.hpp"
 #include "sl/http/v1/detail/strings.hpp"
 #include "sl/http/v1/types.hpp"
 
+#include <bits/chrono.h>
 #include <fmt/base.h>
 #include <fmt/format.h>
 #include <sl/exec.hpp>
 #include <sl/exec/algo/sched/manual.hpp>
+#include <sl/exec/algo/sched/on.hpp>
+#include <sl/exec/algo/sync/serial.hpp>
+#include <sl/exec/algo/tf/seq/flatten.hpp>
 #include <sl/exec/coro/async.hpp>
 #include <sl/exec/thread/pool/monolithic.hpp>
 #include <sl/io.hpp>
@@ -18,8 +34,36 @@
 #include <sl/meta/assert.hpp>
 #include <sl/meta/enum/to_string.hpp>
 #include <sl/meta/match/overloaded.hpp>
+#include <thread>
 
 namespace sl {
+
+using exec::operator co_await;
+using exec::operator|;
+
+struct sync_client {
+    using V = std::uint32_t;
+    using E = std::error_code;
+
+    exec::Signal<V, E> auto read(std::span<std::byte> buffer) & {
+        return exec::as_signal<meta::result<meta::unit, std::error_code>>({}) //
+               | exec::continue_on(executor) //
+               | exec::map([buffer, &client = client](meta::unit) { return client.read(buffer); }) //
+               | exec::flatten() //
+               | exec::continue_on(executor.get_inner());
+    }
+    exec::Signal<V, E> auto write(std::span<const std::byte> buffer) & {
+        return exec::as_signal<meta::result<meta::unit, std::error_code>>({}) //
+               | exec::continue_on(executor) //
+               | exec::map([buffer, &client = client](meta::unit) { return client.write(buffer); }) //
+               | exec::flatten() //
+               | exec::continue_on(executor.get_inner());
+    }
+
+public:
+    io::async::socket::bound& client;
+    exec::serial_executor<>& executor;
+};
 
 std::atomic<std::size_t> request_counter = 0;
 
@@ -65,7 +109,8 @@ void debug_print(const http::v1::message_type& request) {
 }
 
 http::v1::message_type handle(const http::v1::message_type& request) {
-    debug_print(request);
+    (void)request;
+    // debug_print(request);
 
     constexpr std::string_view body_str = "Hello, World!\n";
 
@@ -90,14 +135,13 @@ http::v1::message_type handle(const http::v1::message_type& request) {
     };
 }
 
-exec::async_gen<std::span<const std::byte>, std::error_code>
-    read_agen(sl::io::async::socket::bound& client, exec::executor& executor) {
+exec::async_gen<std::span<const std::byte>, std::error_code> read_agen(sync_client& client) {
     using exec::operator co_await;
     using exec::operator|;
 
     while (true) {
         std::array<std::byte, 1024> buffer{};
-        const auto read_result = co_await (client.read(buffer) | exec::continue_on(executor));
+        const auto read_result = co_await client.read(buffer);
         if (!read_result.has_value()) {
             co_return read_result.error();
         }
@@ -109,17 +153,18 @@ exec::async_gen<std::span<const std::byte>, std::error_code>
 exec::async<void> client_coro(
     std::pair<io::sys::socket, io::sys::address> accepted,
     io::sys::epoll& epoll,
-    exec::executor& executor
+    exec::serial_executor<>& executor
 ) {
-    using exec::operator co_await;
-    using exec::operator|;
 
     auto& [socket, address] = accepted;
     io::state::socket socket_state{ socket };
     auto socket_async = *io::async::socket::create(socket_state);
     auto bound_socket_async = *socket_async->bind(epoll);
     meta::defer unbind_socket{ [&bound_socket_async] { ASSERT(std::move(bound_socket_async).unbind()); } };
-    auto& client = bound_socket_async;
+    sync_client client{
+        .client = bound_socket_async,
+        .executor = executor,
+    };
 
     http::v1::deserialize::config_type config{};
     for (std::size_t i = 0; i < 1; ++i) {
@@ -152,13 +197,31 @@ exec::async<void> client_coro(
     }
 }
 
-exec::async<void> serve_coro(io::async::server::bound server, io::sys::epoll& epoll, exec::executor& executor) {
+exec::async<void> epoll_loop(exec::serial_executor<>& executor, io::sys::epoll& epoll) {
+    std::array<::epoll_event, 1024> events_buffer{};
+    while (true) {
+        const auto wait_result = epoll.wait(events_buffer, meta::null);
+        if (!wait_result.has_value()) {
+            break;
+        }
+        const std::uint32_t nevents = wait_result.value();
+        const auto events = std::span{ events_buffer }.subspan(0, nevents);
+
+        co_await exec::start_on(executor);
+        io::sys::epoll::fulfill(events);
+        co_await exec::start_on(executor.get_inner());
+    }
+    co_return;
+}
+
+exec::async<void>
+    serve_coro(io::async::server::bound server, io::sys::epoll& epoll, exec::serial_executor<>& executor) {
     using exec::operator co_await;
 
     meta::defer unbind_server{ [&server] { ASSERT(std::move(server).unbind()); } };
 
     while (auto accept_result = co_await server.accept()) {
-        exec::coro_schedule(executor, client_coro(std::move(accept_result).value(), epoll, executor));
+        exec::coro_schedule(executor.get_inner(), client_coro(std::move(accept_result).value(), epoll, executor));
     }
 }
 
@@ -180,12 +243,11 @@ void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount) {
         executor_holder =
             std::make_unique<exec::monolithic_thread_pool<>>(exec::thread_pool_config::with_hw_limit(tcount));
     }
-    exec::executor& executor = executor_holder ? *executor_holder : exec::inline_executor();
+    exec::serial_executor<> executor{ executor_holder ? *executor_holder : exec::inline_executor() };
 
-    exec::coro_schedule(executor, serve_coro(std::move(bound_server_async), epoll, executor));
-
-    std::array<::epoll_event, 1024> events{};
-    while (epoll.wait_and_fulfill(events, meta::null)) {}
+    exec::coro_schedule(executor.get_inner(), serve_coro(std::move(bound_server_async), epoll, executor));
+    exec::coro_schedule(executor.get_inner(), epoll_loop(executor, epoll));
+    std::this_thread::sleep_for(std::chrono::days{1});
 }
 
 } // namespace sl
