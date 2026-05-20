@@ -28,16 +28,9 @@ constexpr std::string_view HTTP = "HTTP";
 constexpr auto is_ws(char c) { return c == ' ' || c == '\t'; }
 
 } // namespace tokens
-} // namespace sl::http::v1::detail
-
-namespace sl::http::v1::deserialize::detail {
 
 std::string to_lowercase(std::string_view str);
 bool is_lowercase(std::string_view str);
-
-namespace tokens = v1::detail::tokens;
-using v1::detail::buffer_byte_to_str;
-using v1::detail::buffer_str_to_byte;
 
 std::string_view strip_prefix(std::string_view str, std::string_view prefix);
 std::string_view strip_suffix(std::string_view str, std::string_view suffix);
@@ -90,4 +83,4 @@ constexpr std::size_t enum_max_str_length() {
     return max_str_length;
 }
 
-} // namespace sl::http::v1::deserialize::detail
+} // namespace sl::http::v1::detail
