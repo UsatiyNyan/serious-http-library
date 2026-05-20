@@ -22,10 +22,6 @@ std::span<const std::byte> buffer_str_to_byte(std::string_view str_buffer) {
     return std::bit_cast<std::span<const std::byte>>(char_buffer);
 }
 
-} // namespace sl::http::v1::detail
-
-namespace sl::http::v1::deserialize::detail {
-
 std::string to_lowercase(std::string_view str) {
     std::string result;
     result.reserve(str.size());
@@ -119,4 +115,4 @@ find_split_result try_find_split(std::string_view str_buffer, std::string_view d
     return find_split_result{ .head = result->value, .tail = str_buffer.substr(result->offset) };
 }
 
-} // namespace sl::http::v1::deserialize::detail
+} // namespace sl::http::v1::detail
