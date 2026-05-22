@@ -8,46 +8,37 @@
 
 #include <charconv>
 
-namespace sl::http::v1::deserialize {
-namespace detail {
+namespace sl::http::v1 {
 
-meta::maybe<query_params> parse_query_string(std::string_view query_str) {
-    query_params result;
-
-    while (!query_str.empty()) {
-        // split by '&'
-        auto pair_split = try_find_split_unlimited(query_str, "&");
-        std::string_view pair_str = pair_split.head;
-
-        if (!pair_str.empty()) {
-            // split by '=' for key-value
-            auto kv_split = try_find_split_unlimited(pair_str, "=");
-
-            auto maybe_key = percent_decode_query(kv_split.head);
-            if (!maybe_key.has_value()) {
-                return meta::null;
-            }
-
-            std::string value;
-            if (kv_split.tail.has_value()) {
-                auto maybe_value = percent_decode_query(kv_split.tail.value());
-                if (!maybe_value.has_value()) {
-                    return meta::null;
-                }
-                value = std::move(maybe_value).value();
-            }
-
-            result.emplace_back(std::move(maybe_key).value(), std::move(value));
-        }
-
-        if (!pair_split.tail.has_value()) {
-            break;
-        }
-        query_str = pair_split.tail.value();
+meta::maybe<target_type> parse_target(std::string_view target_str) {
+    if (target_str.empty()) {
+        return meta::null;
     }
 
-    return result;
+    // asterisk-form: exactly "*"
+    if (target_str == "*") {
+        return asterisk_target_type{};
+    }
+
+    // origin-form: starts with "/"
+    if (target_str.starts_with('/')) {
+        return detail::parse_origin_form(target_str).map([](auto&& form) -> target_type { return std::move(form); });
+    }
+
+    // absolute-form: starts with scheme
+    if (target_str.starts_with("http://") || target_str.starts_with("https://")) {
+        return detail::parse_absolute_form(target_str).map([](auto&& form) -> target_type { return std::move(form); });
+    }
+
+    // authority-form: host:port (contains ':' but no '/')
+    if (target_str.find(':') != std::string_view::npos && target_str.find('/') == std::string_view::npos) {
+        return detail::parse_authority_form(target_str).map([](auto&& form) -> target_type { return std::move(form); });
+    }
+
+    return meta::null;
 }
+
+namespace detail {
 
 meta::maybe<origin_target_type> parse_origin_form(std::string_view target_str) {
     // must start with '/'
@@ -169,34 +160,43 @@ meta::maybe<authority_target_type> parse_authority_form(std::string_view target_
     };
 }
 
-} // namespace detail
+meta::maybe<query_params> parse_query_string(std::string_view query_str) {
+    query_params result;
 
-meta::maybe<target_type> target(std::string_view target_str) {
-    if (target_str.empty()) {
-        return meta::null;
+    while (!query_str.empty()) {
+        // split by '&'
+        auto pair_split = try_find_split_unlimited(query_str, "&");
+        std::string_view pair_str = pair_split.head;
+
+        if (!pair_str.empty()) {
+            // split by '=' for key-value
+            auto kv_split = try_find_split_unlimited(pair_str, "=");
+
+            auto maybe_key = percent_decode_query(kv_split.head);
+            if (!maybe_key.has_value()) {
+                return meta::null;
+            }
+
+            std::string value;
+            if (kv_split.tail.has_value()) {
+                auto maybe_value = percent_decode_query(kv_split.tail.value());
+                if (!maybe_value.has_value()) {
+                    return meta::null;
+                }
+                value = std::move(maybe_value).value();
+            }
+
+            result.emplace_back(std::move(maybe_key).value(), std::move(value));
+        }
+
+        if (!pair_split.tail.has_value()) {
+            break;
+        }
+        query_str = pair_split.tail.value();
     }
 
-    // asterisk-form: exactly "*"
-    if (target_str == "*") {
-        return asterisk_target_type{};
-    }
-
-    // origin-form: starts with "/"
-    if (target_str.starts_with('/')) {
-        return detail::parse_origin_form(target_str).map([](auto&& form) -> target_type { return std::move(form); });
-    }
-
-    // absolute-form: starts with scheme
-    if (target_str.starts_with("http://") || target_str.starts_with("https://")) {
-        return detail::parse_absolute_form(target_str).map([](auto&& form) -> target_type { return std::move(form); });
-    }
-
-    // authority-form: host:port (contains ':' but no '/')
-    if (target_str.find(':') != std::string_view::npos && target_str.find('/') == std::string_view::npos) {
-        return detail::parse_authority_form(target_str).map([](auto&& form) -> target_type { return std::move(form); });
-    }
-
-    return meta::null;
+    return result;
 }
 
-} // namespace sl::http::v1::deserialize
+} // namespace detail
+} // namespace sl::http::v1

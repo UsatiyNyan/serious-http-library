@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-namespace sl::http::v1::deserialize::detail {
+namespace sl::http::v1::detail {
 
 // Decode a single percent-encoded sequence (2 hex digits after %)
 // Returns decoded char or null if invalid hex
@@ -21,10 +21,6 @@ meta::maybe<std::string> percent_decode(std::string_view encoded);
 
 // Decode query string component (also handles '+' as space)
 meta::maybe<std::string> percent_decode_query(std::string_view encoded);
-
-} // namespace sl::http::v1::deserialize::detail
-
-namespace sl::http::v1::serialize::detail {
 
 bool percent_encode_is_unreserved(char c);
 bool percent_encode_is_path_safe(char c);
@@ -41,4 +37,4 @@ std::string percent_encode_path(std::string_view decoded);
 // Space encoded as "+" per application/x-www-form-urlencoded
 std::string percent_encode_query(std::string_view decoded);
 
-} // namespace sl::http::v1::serialize::detail
+} // namespace sl::http::v1::detail

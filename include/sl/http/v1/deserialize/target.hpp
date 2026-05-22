@@ -10,10 +10,10 @@
 
 #include <string_view>
 
-namespace sl::http::v1::deserialize {
+namespace sl::http::v1 {
 
 // Main entry point - dispatches to specific form parsers based on prefix
-meta::maybe<target_type> target(std::string_view target_str);
+meta::maybe<target_type> parse_target(std::string_view target_str);
 
 namespace detail {
 
@@ -30,4 +30,4 @@ meta::maybe<authority_target_type> parse_authority_form(std::string_view target_
 meta::maybe<query_params> parse_query_string(std::string_view query_str);
 
 } // namespace detail
-} // namespace sl::http::v1::deserialize
+} // namespace sl::http::v1
