@@ -51,30 +51,3 @@ private:
 };
 
 } // namespace sl::http::v1::detail
-
-namespace sl::http::v1::deserialize::detail {
-
-using v1::detail::remainder_buffer;
-
-template <typename T>
-struct parse_result {
-    static parse_result more(T value, std::size_t offset) {
-        return parse_result{
-            .value = std::move(value),
-            .offset = offset,
-        };
-    }
-
-    static parse_result stop(T value) {
-        return parse_result{
-            .value = std::move(value),
-            .offset = 0,
-        };
-    }
-
-public:
-    T value;
-    std::size_t offset;
-};
-
-} // namespace sl::http::v1::deserialize::detail

@@ -7,28 +7,15 @@
 #include "sl/http/v1/detail/machine.hpp"
 #include "sl/http/v1/types.hpp"
 
-#include <sl/exec/coro/async.hpp>
-#include <sl/exec/coro/async_gen.hpp>
-#include <sl/exec/model/concept.hpp>
-
+#include <sl/meta/func/function.hpp>
 #include <sl/meta/monad/result.hpp>
 #include <sl/meta/type/unit.hpp>
 
 #include <cstddef>
+#include <limits>
 #include <span>
 
-namespace sl::http::v1::deserialize {
-
-template <typename T>
-using io_result = meta::result<T, std::error_code>;
-
-using message_result = meta::result<message_type, status_type>;
-
-struct config_type {
-    std::size_t max_body_size = 1 * 1024 * 1024; // 1 MiB default
-    std::size_t max_field_size = 80 * 1024; // 80 KiB default
-    std::size_t max_reason_size = 8000; // recommended as per RFC 9112
-};
+namespace sl::http::v1 {
 
 struct message_chunk {
     const message_type& message;
@@ -36,116 +23,232 @@ struct message_chunk {
     std::span<const std::byte> chunk;
 };
 
-exec::async_gen<message_chunk, io_result<message_result>>
-    request(exec::async_gen<std::span<const std::byte>, std::error_code> input, config_type config = {});
+struct parse_config {
+    meta::unique_function<void(message_chunk)> chunk_cb;
+    meta::unique_function<void(message_type)> message_cb;
 
-exec::async_gen<message_chunk, io_result<message_result>>
-    response(exec::async_gen<std::span<const std::byte>, std::error_code> input, config_type config = {});
+    std::size_t max_body_size = 1 * 1024 * 1024; // 1 MiB default
+    std::size_t max_field_size = 80 * 1024; // 80 KiB default
+    std::size_t max_reason_size = 8000; // recommended as per RFC 9112
+    std::size_t max_target_size = 8000; // recommended as per RFC 9112
+    std::size_t max_chunk_size_size = 8;
+    std::size_t max_chunk_line_size = max_chunk_size_size + 8 * 1024; // 8B + 8KiB
+};
+
+meta::unique_function<meta::maybe<status_type>(std::span<const std::byte> input)>
+    make_parse_request(parse_config config);
+
+meta::unique_function<meta::maybe<status_type>(std::span<const std::byte> input)>
+    make_parse_response(parse_config config);
 
 namespace detail {
 
-struct state_start_line_request_method {};
-struct state_start_line_request_target {};
-struct state_start_line_request_version {};
-using state_start_line_request = std::variant< //
-    state_start_line_request_method,
-    state_start_line_request_target,
-    state_start_line_request_version>;
+struct parse_state_start_line_request_method {};
+struct parse_state_start_line_request_target {};
+struct parse_state_start_line_request_version {};
+using parse_state_start_line_request = std::variant< //
+    parse_state_start_line_request_method,
+    parse_state_start_line_request_target,
+    parse_state_start_line_request_version>;
 
-struct state_start_line_response_version {};
-struct state_start_line_response_status {};
-struct state_start_line_response_reason {};
-using state_start_line_response = std::variant< //
-    state_start_line_response_version,
-    state_start_line_response_status,
-    state_start_line_response_reason>;
+struct parse_state_start_line_response_version {};
+struct parse_state_start_line_response_status {};
+struct parse_state_start_line_response_reason {};
+using parse_state_start_line_response = std::variant< //
+    parse_state_start_line_response_version,
+    parse_state_start_line_response_status,
+    parse_state_start_line_response_reason>;
 
-using state_start_line = std::variant<state_start_line_request, state_start_line_response>;
+using parse_state_start_line = std::variant<parse_state_start_line_request, parse_state_start_line_response>;
 
-struct state_fields {
+struct parse_state_fields {
     std::size_t consumed_bytes = 0;
 };
-struct state_body {
+struct parse_state_body {
     std::size_t content_length = 0;
 };
 
-struct state_chunked_body_empty {};
-struct state_chunked_body_line {
+struct parse_state_chunked_body_empty {};
+struct parse_state_chunked_body_line {
     std::string chunk_ext;
     std::uint32_t chunk_size = 0;
 };
-struct state_chunked_body_complete {
+struct parse_state_chunked_body_complete {
     std::string chunk_ext;
     std::span<const std::byte> chunk;
 };
-using state_chunked_body = std::variant< //
-    state_chunked_body_empty,
-    state_chunked_body_line,
-    state_chunked_body_complete>;
+using parse_state_chunked_body = std::variant< //
+    parse_state_chunked_body_empty,
+    parse_state_chunked_body_line,
+    parse_state_chunked_body_complete>;
 
-struct state_trailing_fields {
+struct parse_state_trailing_fields {
     std::size_t consumed_bytes = 0;
 };
-struct state_complete {};
+struct parse_state_complete {};
 
-using state = std::variant< //
-    state_start_line,
-    state_fields,
-    state_body,
-    state_chunked_body,
-    state_trailing_fields,
-    state_complete>;
+using parse_state = std::variant< //
+    parse_state_start_line,
+    parse_state_fields,
+    parse_state_body,
+    parse_state_chunked_body,
+    parse_state_trailing_fields,
+    parse_state_complete>;
 
-inline parse_result<meta::result<state, status_type>> make_parse_stop(status_type st) {
-    return parse_result<meta::result<state, status_type>>::stop(meta::err(st));
-}
-inline parse_result<meta::result<state, status_type>> make_parse_stop(state s) {
-    return parse_result<meta::result<state, status_type>>::stop(s);
-}
-inline parse_result<meta::result<state, status_type>> make_parse_more(state s, std::size_t offset) {
-    return parse_result<meta::result<state, status_type>>::more(s, offset);
-}
+struct parse_ok {
+    // continue is offset > 0 or offset == continue_token
+    static constexpr std::size_t continue_token = std::numeric_limits<std::size_t>::max();
+    static parse_ok stop(parse_state state) {
+        return parse_ok{
+            .state = std::move(state),
+            .offset = 0,
+        };
+    }
 
-inline parse_result<meta::result<state_chunked_body, status_type>> make_parse_chunk_stop(state_chunked_body s) {
-    return parse_result<meta::result<state_chunked_body, status_type>>::stop(s);
-}
-inline parse_result<meta::result<state_chunked_body, status_type>> make_parse_chunk_stop(status_type status) {
-    return parse_result<meta::result<state_chunked_body, status_type>>::stop(meta::err(status));
-}
-inline parse_result<meta::result<state_chunked_body, status_type>>
-    make_parse_chunk_more(state_chunked_body s, std::size_t offset) {
-    return parse_result<meta::result<state_chunked_body, status_type>>::more(s, offset);
-}
+public:
+    parse_state state;
+    std::size_t offset;
+};
 
-exec::async_gen<message_chunk, io_result<message_result>> parse_message_machine(
-    message_type output,
-    state s,
-    exec::async_gen<std::span<const std::byte>, std::error_code> input,
-    config_type config
-);
+struct parse_machine {
+    constexpr explicit parse_machine(parse_config config, bool is_request) : config_{ std::move(config) } {
+        DEBUG_ASSERT(!!config_.message_cb);
+        if (is_request) {
+            output_.start_line = request_line_type{};
+        } else {
+            output_.start_line = response_line_type{};
+        }
+    }
 
-parse_result<meta::result<state, status_type>>
-    parse_message(message_type& output, state s, std::span<const std::byte> byte_buffer, const config_type& config);
+    meta::maybe<status_type> parse(std::span<const std::byte> input) &;
 
-parse_result<meta::result<state, status_type>>
-    parse_part(message_type& output, state_start_line_request s, std::string_view buffer, const config_type& config);
-parse_result<meta::result<state, status_type>>
-    parse_part(message_type& output, state_start_line_response s, std::string_view buffer, const config_type& config);
+private: // only dispatch and mutation
+    meta::result<std::size_t, status_type> parse_impl(std::span<const std::byte> input) &;
 
-parse_result<meta::result<state, status_type>> parse_part(
-    message_type& output,
-    std::variant<state_fields, state_trailing_fields> s,
-    std::string_view buffer,
-    const config_type& config
-);
-meta::result<state, status_type>
-    parse_fields_finalize(message_type& output, std::size_t fields_consumed_bytes, const config_type& config);
+public: // transparent
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_start_line state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
 
-parse_result<meta::result<state, status_type>>
-    parse_part(message_type& output, state_body s, std::span<const std::byte> buffer);
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_start_line_request state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_start_line_request_method state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_start_line_request_target state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_start_line_request_version state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
 
-parse_result<meta::result<state_chunked_body, status_type>>
-    parse_chunk(message_type& output, state_chunked_body s, std::span<const std::byte> buffer);
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_start_line_response state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_start_line_response_version state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_start_line_response_status state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_start_line_response_reason state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_fields state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_trailing_fields state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        std::variant<parse_state_fields, parse_state_trailing_fields> state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_state, status_type>
+        parse_state_fields_finalize(message_type& output, const parse_config& config);
+
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_body state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_chunked_body state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_chunked_body_empty state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_chunked_body_line state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_chunked_body_complete state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+
+    static meta::result<parse_ok, status_type> parse_impl(
+        message_type& output,
+        parse_state_complete state,
+        const parse_config& config,
+        std::span<const std::byte> input
+    );
+
+private:
+    message_type output_{};
+    remainder_buffer<> remainder_{}; // TODO: extract outside
+    parse_state state_;
+    parse_config config_;
+};
 
 } // namespace detail
-} // namespace sl::http::v1::deserialize
+} // namespace sl::http::v1

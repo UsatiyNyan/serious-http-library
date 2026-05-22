@@ -8,7 +8,7 @@
 #include <array>
 #include <cstdint>
 
-namespace sl::http::v1::deserialize::detail {
+namespace sl::http::v1::detail {
 
 meta::maybe<char> decode_percent_pair(char high, char low) {
     auto hex_to_val = [](char c) -> meta::maybe<int> {
@@ -76,10 +76,6 @@ meta::maybe<std::string> percent_decode_query(std::string_view encoded) {
     return result;
 }
 
-} // namespace sl::http::v1::deserialize::detail
-
-namespace sl::http::v1::serialize::detail {
-
 bool percent_encode_is_unreserved(char c) {
     constexpr std::array allowed{ '-', '.', '_', '~' };
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
@@ -130,4 +126,4 @@ std::string percent_encode_query(std::string_view decoded) {
     return result;
 }
 
-} // namespace sl::http::v1::serialize::detail
+} // namespace sl::http::v1::detail
