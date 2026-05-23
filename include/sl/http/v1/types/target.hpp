@@ -33,6 +33,9 @@ struct origin_target_type {
 
 // absolute-form = absolute-URI
 // e.g.: "http://example.com/path?query"
+// TODO: 
+//   scheme as enum
+//   port as u16
 struct absolute_target_type {
     std::string scheme;     // "http" or "https"
     std::string authority;  // host[:port]
