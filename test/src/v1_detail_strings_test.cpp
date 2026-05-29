@@ -6,7 +6,7 @@
 
 #include <gtest/gtest.h>
 
-namespace sl::http::v1::deserialize::detail {
+namespace sl::http::v1::detail {
 
 enum class test_enum {
     CCC,

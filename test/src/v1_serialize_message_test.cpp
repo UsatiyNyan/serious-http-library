@@ -6,40 +6,24 @@
 #include "sl/http/v1/serialize/message.hpp"
 
 #include <gtest/gtest.h>
-#include <sl/exec.hpp>
 
 namespace sl::http::v1::serialize {
 
 class SerializeMessageTest : public ::testing::Test {
 protected:
-    // Writer that collects all bytes into a buffer and returns a Signal
-    struct buffer_writer {
-        std::vector<std::byte>& buffer;
-
-        auto write(std::span<const std::byte> data) {
-            buffer.insert(buffer.end(), data.begin(), data.end());
-            return exec::as_signal(
-                meta::result<std::uint32_t, std::error_code>{ static_cast<std::uint32_t>(data.size()) }
-            );
-        }
-    };
-
-    // Execute serialization and return result
     meta::maybe<std::string> serialize(const message_type& msg) {
         std::vector<std::byte> buffer;
-        buffer_writer writer{ buffer };
-        auto coro = message(msg, writer);
-        auto get_result = exec::as_signal(std::move(coro)) | exec::get<exec::nowait_event>();
-        if (!get_result.has_value()) {
-            return meta::null;
-        }
-        auto result = std::move(get_result).value();
-        if (!result.has_value()) {
-            return meta::null;
-        }
-        auto r = result.value();
-        if (r.ec) {
-            return meta::null;
+        serialize_config config{ .buffer_size = 1024 };
+        auto serializer = make_serialize(msg, config);
+
+        std::size_t written = 0;
+        while (true) {
+            auto span = serializer(written);
+            if (span.empty()) {
+                break;
+            }
+            buffer.insert(buffer.end(), span.begin(), span.end());
+            written = span.size();
         }
         return std::string(reinterpret_cast<const char*>(buffer.data()), buffer.size());
     }

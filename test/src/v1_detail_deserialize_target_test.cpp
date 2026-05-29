@@ -11,7 +11,7 @@ namespace sl::http::v1::deserialize {
 // === Asterisk Form ===
 
 TEST(DeserializeTarget, AsteriskForm) {
-    auto result = target("*");
+    auto result = deserialize_target("*");
     ASSERT_TRUE(result.has_value());
     EXPECT_TRUE(std::holds_alternative<asterisk_target_type>(result.value()));
 }
@@ -19,7 +19,7 @@ TEST(DeserializeTarget, AsteriskForm) {
 // === Origin Form ===
 
 TEST(DeserializeTarget, OriginFormRoot) {
-    auto result = target("/");
+    auto result = deserialize_target("/");
     ASSERT_TRUE(result.has_value());
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
@@ -28,7 +28,7 @@ TEST(DeserializeTarget, OriginFormRoot) {
 }
 
 TEST(DeserializeTarget, OriginFormWithPath) {
-    auto result = target("/api/users/123");
+    auto result = deserialize_target("/api/users/123");
     ASSERT_TRUE(result.has_value());
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
@@ -37,7 +37,7 @@ TEST(DeserializeTarget, OriginFormWithPath) {
 }
 
 TEST(DeserializeTarget, OriginFormWithQuery) {
-    auto result = target("/search?q=hello&page=1");
+    auto result = deserialize_target("/search?q=hello&page=1");
     ASSERT_TRUE(result.has_value());
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
@@ -48,7 +48,7 @@ TEST(DeserializeTarget, OriginFormWithQuery) {
 }
 
 TEST(DeserializeTarget, OriginFormPercentDecoded) {
-    auto result = target("/path%20with%20spaces?name=John%20Doe");
+    auto result = deserialize_target("/path%20with%20spaces?name=John%20Doe");
     ASSERT_TRUE(result.has_value());
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
@@ -59,7 +59,7 @@ TEST(DeserializeTarget, OriginFormPercentDecoded) {
 }
 
 TEST(DeserializeTarget, OriginFormQueryPlusAsSpace) {
-    auto result = target("/search?q=hello+world");
+    auto result = deserialize_target("/search?q=hello+world");
     ASSERT_TRUE(result.has_value());
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
@@ -68,7 +68,7 @@ TEST(DeserializeTarget, OriginFormQueryPlusAsSpace) {
 }
 
 TEST(DeserializeTarget, OriginFormEmptyQueryValue) {
-    auto result = target("/path?flag&key=");
+    auto result = deserialize_target("/path?flag&key=");
     ASSERT_TRUE(result.has_value());
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
@@ -78,7 +78,7 @@ TEST(DeserializeTarget, OriginFormEmptyQueryValue) {
 }
 
 TEST(DeserializeTarget, OriginFormDuplicateKeys) {
-    auto result = target("/path?key=1&key=2&key=3");
+    auto result = deserialize_target("/path?key=1&key=2&key=3");
     ASSERT_TRUE(result.has_value());
     auto* origin = std::get_if<origin_target_type>(&result.value());
     ASSERT_NE(origin, nullptr);
@@ -94,7 +94,7 @@ TEST(DeserializeTarget, OriginFormDuplicateKeys) {
 // === Absolute Form ===
 
 TEST(DeserializeTarget, AbsoluteFormHttp) {
-    auto result = target("http://example.com/path?q=1");
+    auto result = deserialize_target("http://example.com/path?q=1");
     ASSERT_TRUE(result.has_value());
     auto* absolute = std::get_if<absolute_target_type>(&result.value());
     ASSERT_NE(absolute, nullptr);
@@ -106,7 +106,7 @@ TEST(DeserializeTarget, AbsoluteFormHttp) {
 }
 
 TEST(DeserializeTarget, AbsoluteFormHttps) {
-    auto result = target("https://secure.example.com:8443/api");
+    auto result = deserialize_target("https://secure.example.com:8443/api");
     ASSERT_TRUE(result.has_value());
     auto* absolute = std::get_if<absolute_target_type>(&result.value());
     ASSERT_NE(absolute, nullptr);
@@ -116,7 +116,7 @@ TEST(DeserializeTarget, AbsoluteFormHttps) {
 }
 
 TEST(DeserializeTarget, AbsoluteFormRootOnly) {
-    auto result = target("http://example.com/");
+    auto result = deserialize_target("http://example.com/");
     ASSERT_TRUE(result.has_value());
     auto* absolute = std::get_if<absolute_target_type>(&result.value());
     ASSERT_NE(absolute, nullptr);
@@ -124,7 +124,7 @@ TEST(DeserializeTarget, AbsoluteFormRootOnly) {
 }
 
 TEST(DeserializeTarget, AbsoluteFormNoPath) {
-    auto result = target("http://example.com");
+    auto result = deserialize_target("http://example.com");
     ASSERT_TRUE(result.has_value());
     auto* absolute = std::get_if<absolute_target_type>(&result.value());
     ASSERT_NE(absolute, nullptr);
@@ -135,7 +135,7 @@ TEST(DeserializeTarget, AbsoluteFormNoPath) {
 // === Authority Form ===
 
 TEST(DeserializeTarget, AuthorityForm) {
-    auto result = target("example.com:443");
+    auto result = deserialize_target("example.com:443");
     ASSERT_TRUE(result.has_value());
     auto* authority = std::get_if<authority_target_type>(&result.value());
     ASSERT_NE(authority, nullptr);
@@ -144,7 +144,7 @@ TEST(DeserializeTarget, AuthorityForm) {
 }
 
 TEST(DeserializeTarget, AuthorityFormLocalhost) {
-    auto result = target("localhost:8080");
+    auto result = deserialize_target("localhost:8080");
     ASSERT_TRUE(result.has_value());
     auto* authority = std::get_if<authority_target_type>(&result.value());
     ASSERT_NE(authority, nullptr);
@@ -153,7 +153,7 @@ TEST(DeserializeTarget, AuthorityFormLocalhost) {
 }
 
 TEST(DeserializeTarget, AuthorityFormMaxPort) {
-    auto result = target("host:65535");
+    auto result = deserialize_target("host:65535");
     ASSERT_TRUE(result.has_value());
     auto* authority = std::get_if<authority_target_type>(&result.value());
     ASSERT_NE(authority, nullptr);
@@ -163,42 +163,42 @@ TEST(DeserializeTarget, AuthorityFormMaxPort) {
 // === Error Cases ===
 
 TEST(DeserializeTarget, EmptyTarget) {
-    auto result = target("");
+    auto result = deserialize_target("");
     EXPECT_FALSE(result.has_value());
 }
 
 TEST(DeserializeTarget, InvalidPercentEncodingBadHex) {
-    auto result = target("/path%GG");
+    auto result = deserialize_target("/path%GG");
     EXPECT_FALSE(result.has_value());
 }
 
 TEST(DeserializeTarget, InvalidPercentEncodingIncomplete) {
-    auto result = target("/path%2");
+    auto result = deserialize_target("/path%2");
     EXPECT_FALSE(result.has_value());
 }
 
 TEST(DeserializeTarget, InvalidPercentEncodingTrailing) {
-    auto result = target("/path%");
+    auto result = deserialize_target("/path%");
     EXPECT_FALSE(result.has_value());
 }
 
 TEST(DeserializeTarget, InvalidPortOverflow) {
-    auto result = target("host:99999");
+    auto result = deserialize_target("host:99999");
     EXPECT_FALSE(result.has_value());
 }
 
 TEST(DeserializeTarget, InvalidPortNonNumeric) {
-    auto result = target("host:abc");
+    auto result = deserialize_target("host:abc");
     EXPECT_FALSE(result.has_value());
 }
 
 TEST(DeserializeTarget, InvalidPortEmptyHost) {
-    auto result = target(":443");
+    auto result = deserialize_target(":443");
     EXPECT_FALSE(result.has_value());
 }
 
 TEST(DeserializeTarget, InvalidForm) {
-    auto result = target("not-a-valid-target");
+    auto result = deserialize_target("not-a-valid-target");
     EXPECT_FALSE(result.has_value());
 }
 
