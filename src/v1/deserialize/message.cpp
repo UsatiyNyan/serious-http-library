@@ -114,7 +114,6 @@ meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     const deserialize_config& config,
     std::span<const std::byte> input
 ) {
-    DEBUG_ASSERT(std::holds_alternative<request_line_type>(output.start_line));
     return std::visit([&](const auto& a_state) { return deserialize_impl(output, a_state, config, input); }, state);
 }
 
@@ -125,11 +124,12 @@ meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     const deserialize_config& config,
     std::span<const std::byte> input
 ) {
+    DEBUG_ASSERT(std::holds_alternative<request_line_type>(output.start_line));
     return std::visit([&](const auto& a_state) { return deserialize_impl(output, a_state, config, input); }, state);
 }
 meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    deserialize_state_start_line_request_version state,
+    deserialize_state_start_line_request_method state,
     const deserialize_config& config,
     std::span<const std::byte> input
 ) {
@@ -189,7 +189,7 @@ meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
 }
 meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    deserialize_state_start_line_request_method state,
+    deserialize_state_start_line_request_version state,
     const deserialize_config& config,
     std::span<const std::byte> input
 ) {

@@ -107,6 +107,7 @@ void percent_encode::serialize_query(std::string& result, const query_params& qu
     bool first = true;
     for (const auto& [key, value] : query) {
         const char c = std::exchange(first, false) ? '?' : '&';
+        result += c;
         serialize_query(result, key);
         result += '=';
         serialize_query(result, value);

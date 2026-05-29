@@ -116,8 +116,10 @@ struct deserialize_machine {
         DEBUG_ASSERT(!!config_.message_cb);
         if (is_request) {
             output_.start_line = request_line_type{};
+            state_ = deserialize_state_start_line{ deserialize_state_start_line_request{} };
         } else {
             output_.start_line = response_line_type{};
+            state_ = deserialize_state_start_line{ deserialize_state_start_line_response{} };
         }
     }
 
