@@ -1,104 +1,30 @@
 //
 // Created by usatiynyan.
 //
-// WARNING: This example has a use-after-free bug under concurrent load.
-// Root cause: read_agen() captures sync_client& by reference, but sync_client
-// holds references to stack-local data (bound_socket_async, executor).
-// When the generator is moved into deserialize::request(), the coroutine frame
-// still references data on client_coro's stack. Thread pool resumes different
-// coroutine pieces on different threads = UAF.
-//
-// Possible fixes:
-//   A) Use shared_ptr ownership in sync_client instead of references
-//   B) Replace async_gen with explicit state machine (no coroutine frame refs)
-//   C) Single-thread per connection (no cross-thread coroutine resume)
-//
 
 #include "sl/http.hpp"
+#include "sl/http/v1/deserialize/message.hpp"
 #include "sl/http/v1/detail/strings.hpp"
-#include "sl/http/v1/types.hpp"
+#include "sl/http/v1/serialize/target.hpp"
 
-#include <bits/chrono.h>
+#include <sl/exec.hpp>
+#include <sl/io.hpp>
+#include <sl/meta.hpp>
+
 #include <fmt/base.h>
 #include <fmt/format.h>
-#include <sl/exec.hpp>
-#include <sl/exec/algo/sched/manual.hpp>
-#include <sl/exec/algo/sched/on.hpp>
-#include <sl/exec/algo/sync/serial.hpp>
-#include <sl/exec/algo/tf/seq/flatten.hpp>
-#include <sl/exec/coro/async.hpp>
-#include <sl/exec/thread/pool/monolithic.hpp>
-#include <sl/io.hpp>
 
-#include <sl/io/async/socket.hpp>
-#include <sl/meta/assert.hpp>
-#include <sl/meta/enum/to_string.hpp>
-#include <sl/meta/match/overloaded.hpp>
-#include <thread>
+#include <bits/chrono.h>
 
 namespace sl {
 
 using exec::operator co_await;
 using exec::operator|;
 
-struct sync_client {
-    using V = std::uint32_t;
-    using E = std::error_code;
-
-    exec::Signal<V, E> auto read(std::span<std::byte> buffer) & {
-        return exec::as_signal<meta::result<meta::unit, std::error_code>>({}) //
-               | exec::continue_on(executor) //
-               | exec::map([buffer, &client = client](meta::unit) { return client.read(buffer); }) //
-               | exec::flatten() //
-               | exec::continue_on(executor.get_inner());
-    }
-    exec::Signal<V, E> auto write(std::span<const std::byte> buffer) & {
-        return exec::as_signal<meta::result<meta::unit, std::error_code>>({}) //
-               | exec::continue_on(executor) //
-               | exec::map([buffer, &client = client](meta::unit) { return client.write(buffer); }) //
-               | exec::flatten() //
-               | exec::continue_on(executor.get_inner());
-    }
-
-public:
-    io::async::socket::bound& client;
-    exec::serial_executor<>& executor;
-};
-
-std::atomic<std::size_t> request_counter = 0;
-
-std::string format_query(const http::v1::query_params& query) {
-    if (query.empty()) {
-        return "";
-    }
-    std::string result = "?";
-    for (std::size_t i = 0; i < query.size(); ++i) {
-        if (i > 0) {
-            result += "&";
-        }
-        result += fmt::format("{}={}", query[i].first, query[i].second);
-    }
-    return result;
-}
-
-std::string format_target(const http::v1::target_type& target) {
-    return std::visit(
-        meta::overloaded{
-            [](const http::v1::origin_target_type& t) { return fmt::format("{}{}", t.path, format_query(t.query)); },
-            [](const http::v1::absolute_target_type& t) {
-                return fmt::format("{}://{}{}{}", t.scheme, t.authority, t.path, format_query(t.query));
-            },
-            [](const http::v1::authority_target_type& t) { return fmt::format("{}:{}", t.host, t.port); },
-            [](const http::v1::asterisk_target_type&) { return std::string{ "*" }; },
-        },
-        target
-    );
-}
-
 void debug_print(const http::v1::message_type& request) {
     const auto& req = std::get<http::v1::request_line_type>(request.start_line);
-    fmt::println("=== Request #{} ===", request_counter.fetch_add(1));
-    fmt::println("{} {}", enum_to_str(req.method), format_target(req.target));
+    fmt::println("=== Request # ===");
+    fmt::println("{} {}", enum_to_str(req.method), http::v1::serialize(req.target));
     for (const auto& [name, value] : request.fields) {
         fmt::println("{}: {}", name, value);
     }
@@ -108,9 +34,10 @@ void debug_print(const http::v1::message_type& request) {
     fmt::println("================");
 }
 
-http::v1::message_type handle(const http::v1::message_type& request) {
-    (void)request;
-    // debug_print(request);
+http::v1::message_type handle(const http::v1::message_type& request, bool is_logging) {
+    if (is_logging) {
+        debug_print(request);
+    }
 
     constexpr std::string_view body_str = "Hello, World!\n";
 
@@ -135,108 +62,101 @@ http::v1::message_type handle(const http::v1::message_type& request) {
     };
 }
 
-exec::async_gen<std::span<const std::byte>, std::error_code> read_agen(sync_client& client) {
-    using exec::operator co_await;
-    using exec::operator|;
-
-    while (true) {
-        std::array<std::byte, 1024> buffer{};
-        const auto read_result = co_await client.read(buffer);
-        if (!read_result.has_value()) {
-            co_return read_result.error();
-        }
-        co_yield std::span{ buffer.data(), *read_result };
-    }
-    co_return std::error_code{};
-}
-
 exec::async<void> client_coro(
     std::pair<io::sys::socket, io::sys::address> accepted,
     io::sys::epoll& epoll,
-    exec::serial_executor<>& executor
+    exec::serial_executor<>& executor,
+    bool is_logging
 ) {
-
     auto& [socket, address] = accepted;
-    io::state::socket socket_state{ socket };
-    auto socket_async = *io::async::socket::create(socket_state);
-    auto bound_socket_async = *socket_async->bind(epoll);
-    meta::defer unbind_socket{ [&bound_socket_async] { ASSERT(std::move(bound_socket_async).unbind()); } };
-    sync_client client{
-        .client = bound_socket_async,
-        .executor = executor,
-    };
+    auto socket_async = *io::async::socket::create(socket, epoll);
 
-    http::v1::deserialize::config_type config{};
-    for (std::size_t i = 0; i < 1; ++i) {
-        auto reader = read_agen(client);
-        auto request_agen = http::v1::deserialize::request(std::move(reader), config);
-        while (auto request_chunk = co_await request_agen) {
-            fmt::println("chunk?");
-            // TODO: handle chunks
+    meta::maybe<http::v1::message_type> maybe_request = meta::null;
+
+    {
+        auto deserialize = http::v1::make_deserialize_request(
+            http::v1::deserialize_config{
+                .message_cb =
+                    [&maybe_request](http::v1::message_type request) { maybe_request.emplace(std::move(request)); },
+            }
+        );
+
+        std::array<std::byte, 1024> read_buffer{};
+        while (!maybe_request.has_value()) {
+            co_await exec::start_on(executor);
+            const auto io_result = co_await socket_async->read(read_buffer);
+            co_await exec::start_on(executor.get_inner());
+            if (!io_result.has_value()) {
+                if (io_result.error() == std::errc::connection_reset) {
+                    co_return;
+                }
+                PANIC("read io:", io_result.error().message());
+            }
+            const auto input = std::span{ read_buffer }.subspan(0, io_result.value());
+            const auto maybe_error = deserialize(input);
+            if (maybe_error.has_value()) {
+                PANIC("deserialize status:", static_cast<std::uint16_t>(maybe_error.value()));
+            }
         }
-        auto io_result = std::move(request_agen).result_or_throw();
-        if (!io_result.has_value()) {
-            if (io_result.error() == std::errc::connection_reset) {
+    }
+
+    const auto response = handle(maybe_request.value(), is_logging);
+
+    {
+        auto serialize = http::v1::make_serialize(
+            response,
+            http::v1::serialize_config{
+                .buffer_size = 1024,
+            }
+        );
+
+        std::size_t written = 0;
+        while (true) {
+            const auto write_buffer = serialize(written);
+            if (write_buffer.empty()) {
                 break;
             }
-            PANIC("io:", io_result.error().message());
-        }
-        auto request_result = std::move(io_result).value();
-        if (!request_result.has_value()) {
-            PANIC("status:", static_cast<std::uint16_t>(request_result.error()));
-        }
-        const auto request = std::move(request_result).value();
-        const auto response = handle(request);
-        const auto serialize_result = co_await http::v1::serialize::message(response, client);
-        if (serialize_result.ec) {
-            if (serialize_result.ec == std::errc::connection_reset || serialize_result.ec == std::errc::broken_pipe) {
-                break;
+            co_await exec::start_on(executor);
+            const auto io_result = co_await socket_async->write(write_buffer);
+            co_await exec::start_on(executor.get_inner());
+            if (!io_result.has_value()) {
+                if (io_result.error() == std::errc::connection_reset || io_result.error() == std::errc::broken_pipe) {
+                    co_return;
+                }
+                PANIC("serialize io:", io_result.error().message());
             }
-            PANIC("serialize:", serialize_result.ec.message());
+            written = io_result.value();
         }
     }
 }
 
-exec::async<void> epoll_loop(exec::serial_executor<>& executor, io::sys::epoll& epoll) {
-    std::array<::epoll_event, 1024> events_buffer{};
-    while (true) {
-        const auto wait_result = epoll.wait(events_buffer, meta::null);
-        if (!wait_result.has_value()) {
-            break;
-        }
-        const std::uint32_t nevents = wait_result.value();
-        const auto events = std::span{ events_buffer }.subspan(0, nevents);
-
-        co_await exec::start_on(executor);
-        io::sys::epoll::fulfill(events);
-        co_await exec::start_on(executor.get_inner());
-    }
-    co_return;
-}
-
-exec::async<void>
-    serve_coro(io::async::server::bound server, io::sys::epoll& epoll, exec::serial_executor<>& executor) {
+exec::async<void> serve_coro(
+    std::unique_ptr<io::async::server> server_async,
+    io::sys::epoll& epoll,
+    exec::serial_executor<>& executor,
+    bool is_logging
+) {
     using exec::operator co_await;
 
-    meta::defer unbind_server{ [&server] { ASSERT(std::move(server).unbind()); } };
-
-    while (auto accept_result = co_await server.accept()) {
-        exec::coro_schedule(executor.get_inner(), client_coro(std::move(accept_result).value(), epoll, executor));
+    while (true) {
+        co_await exec::start_on(executor);
+        auto accept_result = co_await server_async->accept();
+        co_await exec::start_on(executor.get_inner());
+        exec::coro_schedule(
+            executor.get_inner(), client_coro(std::move(accept_result).value(), epoll, executor, is_logging)
+        );
     }
 }
 
-void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount) {
+void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount, bool is_logging) {
+    auto epoll = *ASSERT_VAL(io::sys::epoll::create());
+
     auto socket = *ASSERT_VAL(io::sys::socket::create(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0));
     ASSERT(socket.set_opt(SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, 1));
     const auto address = io::sys::make_ipv4_address(AF_INET, port, INADDR_ANY);
     auto bound_server = *ASSERT_VAL(std::move(socket).bind(address));
     auto server = *ASSERT_VAL(std::move(bound_server).listen(max_clients));
-
-    io::state::server server_state{ server };
-    auto server_async = *ASSERT_VAL(io::async::server::create(server_state));
-
-    auto epoll = *ASSERT_VAL(io::sys::epoll::create());
-    auto bound_server_async = *ASSERT_VAL(server_async->bind(epoll));
+    auto server_async = *ASSERT_VAL(io::async::server::create(server, epoll));
 
     std::unique_ptr<exec::executor> executor_holder;
     if (tcount > 0) {
@@ -245,24 +165,37 @@ void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount) {
     }
     exec::serial_executor<> executor{ executor_holder ? *executor_holder : exec::inline_executor() };
 
-    exec::coro_schedule(executor.get_inner(), serve_coro(std::move(bound_server_async), epoll, executor));
-    exec::coro_schedule(executor.get_inner(), epoll_loop(executor, epoll));
-    std::this_thread::sleep_for(std::chrono::days{1});
+    exec::coro_schedule(executor.get_inner(), serve_coro(std::move(server_async), epoll, executor, is_logging));
+
+    while (true) {
+        std::array<::epoll_event, 1024> events{};
+        const auto wait_result = epoll.wait(events, meta::null);
+        if (!wait_result.has_value()) {
+            break;
+        }
+        const std::uint32_t nevents = wait_result.value();
+
+        exec::schedule(executor, [events, nevents]() mutable {
+            io::sys::epoll::fulfill(std::span{ events }.subspan(0, nevents));
+            return meta::ok(meta::unit{});
+        }) | exec::detach();
+    }
 }
 
 } // namespace sl
 
 auto parse_args(int argc, const char* argv[]) {
-    ASSERT(argc == 4, "port, max_clients, tcount");
+    ASSERT(argc == 5, "port, max_clients, tcount, logging");
     return std::make_tuple(
         static_cast<std::uint16_t>(std::strtoul(argv[1], nullptr, 10)),
         static_cast<std::uint16_t>(std::strtoul(argv[2], nullptr, 10)),
-        static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 10))
+        static_cast<std::uint32_t>(std::strtoul(argv[3], nullptr, 10)),
+        static_cast<std::uint16_t>(std::strtoul(argv[4], nullptr, 10))
     );
 }
 
 int main(int argc, const char* argv[]) {
-    const auto [port, max_clients, tcount] = parse_args(argc, argv);
-    sl::main(port, max_clients, tcount);
+    const auto [port, max_clients, tcount, is_logging] = parse_args(argc, argv);
+    sl::main(port, max_clients, tcount, is_logging == 1);
     return 0;
 }

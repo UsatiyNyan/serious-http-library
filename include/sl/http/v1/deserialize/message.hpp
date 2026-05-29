@@ -24,8 +24,8 @@ struct message_chunk {
 };
 
 struct deserialize_config {
-    meta::unique_function<void(message_chunk)> chunk_cb;
-    meta::unique_function<void(message_type)> message_cb;
+    meta::unique_function<void(message_chunk)> chunk_cb = [](message_chunk) {};
+    meta::unique_function<void(message_type)> message_cb = [](message_type) {};
 
     std::size_t max_body_size = 1 * 1024 * 1024; // 1 MiB default
     std::size_t max_field_size = 80 * 1024; // 80 KiB default
