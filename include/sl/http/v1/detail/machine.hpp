@@ -20,7 +20,9 @@ struct remainder_buffer {
     using buffer_type = std::vector<std::byte, AllocT>;
 
 public:
-    explicit remainder_buffer(const AllocT& alloc = AllocT{}) : buffer_{ alloc } {}
+    explicit remainder_buffer(std::size_t reserve_size = 0, const AllocT& alloc = AllocT{}) : buffer_{ alloc } {
+        buffer_.reserve(reserve_size);
+    }
 
     [[nodiscard]] std::span<const std::byte> view() const {
         ASSERT(buffer_.size() >= offset_);

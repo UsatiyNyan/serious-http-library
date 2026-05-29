@@ -111,7 +111,7 @@ public:
 };
 
 struct parse_machine {
-    constexpr explicit parse_machine(parse_config config, bool is_request) : config_{ std::move(config) } {
+    constexpr parse_machine(parse_config config, bool is_request) : config_{ std::move(config) } {
         DEBUG_ASSERT(!!config_.message_cb);
         if (is_request) {
             output_.start_line = request_line_type{};
