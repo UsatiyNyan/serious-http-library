@@ -24,28 +24,28 @@
 namespace sl::http::v1 {
 
 meta::unique_function<meta::maybe<status_type>(std::span<const std::byte> input)>
-    make_parse_request(parse_config config) {
-    return [m = detail::parse_machine{ std::move(config), /*is_request=*/true }] //
-        (std::span<const std::byte> input) mutable { return m.parse(input); };
+    make_deserialize_request(deserialize_config config) {
+    return [m = detail::deserialize_machine{ std::move(config), /*is_request=*/true }] //
+        (std::span<const std::byte> input) mutable { return m.deserialize(input); };
 }
 
 meta::unique_function<meta::maybe<status_type>(std::span<const std::byte> input)>
-    make_parse_response(parse_config config) {
-    return [m = detail::parse_machine{ std::move(config), /*is_request=*/false }] //
-        (std::span<const std::byte> input) mutable { return m.parse(input); };
+    make_deserialize_response(deserialize_config config) {
+    return [m = detail::deserialize_machine{ std::move(config), /*is_request=*/false }] //
+        (std::span<const std::byte> input) mutable { return m.deserialize(input); };
 }
 
 namespace detail {
 
-meta::maybe<status_type> parse_machine::parse(std::span<const std::byte> input) & {
+meta::maybe<status_type> deserialize_machine::deserialize(std::span<const std::byte> input) & {
     if (remainder_.view().empty()) { // less allocations and copying
         while (!input.empty()) {
-            const auto result = parse_impl(input);
+            const auto result = deserialize_impl(input);
             if (!result.has_value()) {
                 return result.error();
             }
             const std::size_t offset = result.value();
-            if (offset == parse_ok::continue_token) {
+            if (offset == deserialize_ok::continue_token) {
                 continue;
             }
             input = input.subspan(offset);
@@ -58,12 +58,12 @@ meta::maybe<status_type> parse_machine::parse(std::span<const std::byte> input) 
     std::ignore = remainder_.merge(input);
 
     while (true) {
-        const auto result = parse_impl(remainder_.view());
+        const auto result = deserialize_impl(remainder_.view());
         if (!result.has_value()) {
             return result.error();
         }
         const std::size_t offset = result.value();
-        if (offset == parse_ok::continue_token) {
+        if (offset == deserialize_ok::continue_token) {
             continue;
         }
         remainder_.add_offset(offset);
@@ -75,13 +75,13 @@ meta::maybe<status_type> parse_machine::parse(std::span<const std::byte> input) 
     return meta::null;
 }
 
-meta::result<std::size_t, status_type> parse_machine::parse_impl(std::span<const std::byte> input) & {
-    return std::visit([&](const auto& state) { return parse_impl(output_, state, config_, input); }, state_)
-        .map([&](parse_ok ok) -> std::size_t {
+meta::result<std::size_t, status_type> deserialize_machine::deserialize_impl(std::span<const std::byte> input) & {
+    return std::visit([&](const auto& state) { return deserialize_impl(output_, state, config_, input); }, state_)
+        .map([&](deserialize_ok ok) -> std::size_t {
             state_ = std::move(ok.state);
 
-            if (auto* state = std::get_if<parse_state_chunked_body>(&state_)) {
-                if (auto* chunked_state = std::get_if<parse_state_chunked_body_complete>(state)) {
+            if (auto* state = std::get_if<deserialize_state_chunked_body>(&state_)) {
+                if (auto* chunked_state = std::get_if<deserialize_state_chunked_body_complete>(state)) {
                     config_.chunk_cb(
                         message_chunk{
                             .message = output_,
@@ -92,7 +92,7 @@ meta::result<std::size_t, status_type> parse_machine::parse_impl(std::span<const
                 }
             }
 
-            if (auto* state = std::get_if<parse_state_complete>(&state_)) {
+            if (auto* state = std::get_if<deserialize_state_complete>(&state_)) {
                 message_type output;
                 output.start_line = std::visit(
                     meta::overloaded{
@@ -108,29 +108,29 @@ meta::result<std::size_t, status_type> parse_machine::parse_impl(std::span<const
         });
 }
 
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_start_line state,
-    const parse_config& config,
+    deserialize_state_start_line state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     DEBUG_ASSERT(std::holds_alternative<request_line_type>(output.start_line));
-    return std::visit([&](const auto& a_state) { return parse_impl(output, a_state, config, input); }, state);
+    return std::visit([&](const auto& a_state) { return deserialize_impl(output, a_state, config, input); }, state);
 }
 
 // method SP request-target SP HTTP-version CRLF
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_start_line_request state,
-    const parse_config& config,
+    deserialize_state_start_line_request state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
-    return std::visit([&](const auto& a_state) { return parse_impl(output, a_state, config, input); }, state);
+    return std::visit([&](const auto& a_state) { return deserialize_impl(output, a_state, config, input); }, state);
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_start_line_request_version state,
-    const parse_config& config,
+    deserialize_state_start_line_request_version state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     const auto input_str = buffer_byte_to_str(input);
@@ -143,7 +143,7 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
             return meta::err(status_type::NOT_IMPLEMENTED);
         }
         DEBUG_ASSERT(method_err == find_err::NOT_FOUND);
-        return parse_ok::stop(state);
+        return deserialize_ok::stop(state);
     }
 
     const auto& [method_str, method_offset] = method_result.value();
@@ -153,15 +153,15 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
     }
 
     std::get<request_line_type>(output.start_line).method = method;
-    return parse_ok{
-        .state = parse_state_start_line_request{ parse_state_start_line_request_target{} },
+    return deserialize_ok{
+        .state = deserialize_state_start_line_request{ deserialize_state_start_line_request_target{} },
         .offset = method_offset,
     };
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_start_line_request_target state,
-    const parse_config& config,
+    deserialize_state_start_line_request_target state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     const auto input_str = buffer_byte_to_str(input);
@@ -172,25 +172,25 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
             return meta::err(status_type::URI_TOO_LONG);
         }
         DEBUG_ASSERT(target_err == find_err::NOT_FOUND);
-        return parse_ok::stop(state);
+        return deserialize_ok::stop(state);
     }
     const auto& [target_str, target_offset] = target_result.value();
 
-    auto maybe_target = parse_target(target_str);
+    auto maybe_target = deserialize_target(target_str);
     if (!maybe_target.has_value()) {
         return meta::err(status_type::BAD_REQUEST);
     }
 
     std::get<request_line_type>(output.start_line).target = std::move(maybe_target).value();
-    return parse_ok{
-        .state = parse_state_start_line_request{ parse_state_start_line_request_version{} },
+    return deserialize_ok{
+        .state = deserialize_state_start_line_request{ deserialize_state_start_line_request_version{} },
         .offset = target_offset,
     };
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_start_line_request_method state,
-    const parse_config& config,
+    deserialize_state_start_line_request_method state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     const auto input_str = buffer_byte_to_str(input);
@@ -202,7 +202,7 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
             return meta::err(status_type::BAD_REQUEST);
         }
         DEBUG_ASSERT(version_err == find_err::NOT_FOUND);
-        return parse_ok::stop(state);
+        return deserialize_ok::stop(state);
     }
 
     const auto& [version_str, version_offset] = version_result.value();
@@ -212,26 +212,26 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
     }
 
     std::get<request_line_type>(output.start_line).version = version;
-    return parse_ok{
-        .state = parse_state_fields{},
+    return deserialize_ok{
+        .state = deserialize_state_fields{},
         .offset = version_offset,
     };
 }
 
 // HTTP-version SP status-code SP [ reason-phrase ] CRLF
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_start_line_response state,
-    const parse_config& config,
+    deserialize_state_start_line_response state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     DEBUG_ASSERT(std::holds_alternative<response_line_type>(output.start_line));
-    return std::visit([&](const auto& a_state) { return parse_impl(output, a_state, config, input); }, state);
+    return std::visit([&](const auto& a_state) { return deserialize_impl(output, a_state, config, input); }, state);
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_start_line_response_version state,
-    const parse_config& config,
+    deserialize_state_start_line_response_version state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     const auto input_str = buffer_byte_to_str(input);
@@ -243,7 +243,7 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
             return meta::err(status_type::BAD_REQUEST);
         }
         DEBUG_ASSERT(version_err == find_err::NOT_FOUND);
-        return parse_ok::stop(state);
+        return deserialize_ok::stop(state);
     }
 
     const auto& [version_str, version_offset] = version_result.value();
@@ -253,15 +253,15 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
     }
 
     std::get<response_line_type>(output.start_line).version = version;
-    return parse_ok{
-        .state = parse_state_start_line_response{ parse_state_start_line_response_status{} },
+    return deserialize_ok{
+        .state = deserialize_state_start_line_response{ deserialize_state_start_line_response_status{} },
         .offset = version_offset,
     };
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_start_line_response_status state,
-    const parse_config& config,
+    deserialize_state_start_line_response_status state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     const auto input_str = buffer_byte_to_str(input);
@@ -274,7 +274,7 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
             return meta::err(status_type::BAD_REQUEST);
         }
         DEBUG_ASSERT(status_err == find_err::NOT_FOUND);
-        return parse_ok::stop(state);
+        return deserialize_ok::stop(state);
     }
 
     const auto& [status_str, status_offset] = status_result.value();
@@ -289,15 +289,15 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
     }
 
     std::get<response_line_type>(output.start_line).status = static_cast<status_type>(status_code);
-    return parse_ok{
-        .state = parse_state_start_line_response{ parse_state_start_line_response_reason{} },
+    return deserialize_ok{
+        .state = deserialize_state_start_line_response{ deserialize_state_start_line_response_reason{} },
         .offset = status_offset,
     };
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_start_line_response_reason state,
-    const parse_config& config,
+    deserialize_state_start_line_response_reason state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     const auto input_str = buffer_byte_to_str(input);
@@ -308,13 +308,13 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
             return meta::err(status_type::BAD_REQUEST);
         }
         DEBUG_ASSERT(reason_err == find_err::NOT_FOUND);
-        return parse_ok::stop(state);
+        return deserialize_ok::stop(state);
     }
 
     const auto& [reason_str, reason_offset] = reason_result.value();
     std::get<response_line_type>(output.start_line).reason = reason_str;
-    return parse_ok{
-        .state = parse_state_fields{},
+    return deserialize_ok{
+        .state = deserialize_state_fields{},
         .offset = reason_offset,
     };
 }
@@ -322,26 +322,30 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
 // *( field-line CRLF ) CRLF
 // field-line   = field-name ":" OWS field-value OWS
 // OWS = *(SP / HTAB)
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_fields state,
-    const parse_config& config,
+    deserialize_state_fields state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
-    return parse_impl(output, std::variant<parse_state_fields, parse_state_trailing_fields>(state), config, input);
+    return deserialize_impl(
+        output, std::variant<deserialize_state_fields, deserialize_state_trailing_fields>(state), config, input
+    );
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_trailing_fields state,
-    const parse_config& config,
+    deserialize_state_trailing_fields state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
-    return parse_impl(output, std::variant<parse_state_fields, parse_state_trailing_fields>(state), config, input);
+    return deserialize_impl(
+        output, std::variant<deserialize_state_fields, deserialize_state_trailing_fields>(state), config, input
+    );
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    std::variant<parse_state_fields, parse_state_trailing_fields> state,
-    const parse_config& config,
+    std::variant<deserialize_state_fields, deserialize_state_trailing_fields> state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     const auto input_str = buffer_byte_to_str(input);
@@ -353,7 +357,7 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
             return meta::err(status_type::CONTENT_TOO_LARGE);
         }
         DEBUG_ASSERT(field_line_err == find_err::NOT_FOUND);
-        return std::visit([](auto s) { return parse_ok::stop(s); }, state);
+        return std::visit([](auto s) { return deserialize_ok::stop(s); }, state);
     }
     const auto& [field_line, field_line_offset] = field_line_result.value();
     std::visit([field_line_offset](auto& s) { s.consumed_bytes += field_line_offset; }, state);
@@ -382,7 +386,7 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
 
         return std::visit(
             [field_line_offset](auto s) {
-                return parse_ok{
+                return deserialize_ok{
                     .state = s,
                     .offset = field_line_offset,
                 };
@@ -396,20 +400,20 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
 
     return std::visit(
         meta::overloaded{
-            [&](parse_state_fields) {
-                return parse_state_fields_finalize(output, config).map([field_line_offset](parse_state s) {
-                    return parse_ok{ .state = s, .offset = field_line_offset };
+            [&](deserialize_state_fields) {
+                return deserialize_state_fields_finalize(output, config).map([field_line_offset](deserialize_state s) {
+                    return deserialize_ok{ .state = s, .offset = field_line_offset };
                 });
             },
-            [field_line_offset](parse_state_trailing_fields) -> meta::result<parse_ok, status_type> {
-                return parse_ok{ .state = parse_state_complete{}, .offset = field_line_offset };
+            [field_line_offset](deserialize_state_trailing_fields) -> meta::result<deserialize_ok, status_type> {
+                return deserialize_ok{ .state = deserialize_state_complete{}, .offset = field_line_offset };
             },
         },
         state
     );
 }
-meta::result<parse_state, status_type>
-    parse_machine::parse_state_fields_finalize(message_type& output, const parse_config& config) {
+meta::result<deserialize_state, status_type>
+    deserialize_machine::deserialize_state_fields_finalize(message_type& output, const deserialize_config& config) {
     const auto find_field = [&fields = output.fields](std::string_view k) -> meta::maybe<std::string_view> {
         DEBUG_ASSERT(is_lowercase(k));
         auto it = fields.find(k);
@@ -436,7 +440,7 @@ meta::result<parse_state, status_type>
         }
         return false;
     };
-    constexpr auto parse_content_length = [](std::string_view content_length_str) -> meta::maybe<std::size_t> {
+    constexpr auto deserialize_content_length = [](std::string_view content_length_str) -> meta::maybe<std::size_t> {
         std::size_t content_length = 0;
         const auto conv_result = std::from_chars(content_length_str.begin(), content_length_str.end(), content_length);
         if (conv_result.ec != std::error_code{} || conv_result.ptr != content_length_str.end()) {
@@ -454,26 +458,26 @@ meta::result<parse_state, status_type>
             // TODO: or is it?
             return meta::err(status_type::BAD_REQUEST);
         }
-        return parse_state_chunked_body{ parse_state_chunked_body_empty{} };
+        return deserialize_state_chunked_body{ deserialize_state_chunked_body_empty{} };
     }
 
-    const auto maybe_content_length = maybe_content_length_str.and_then(parse_content_length);
+    const auto maybe_content_length = maybe_content_length_str.and_then(deserialize_content_length);
     const auto content_length = maybe_content_length.value_or(0);
     if (content_length == 0) {
-        return parse_state_complete{};
+        return deserialize_state_complete{};
     }
 
     if (content_length > config.max_body_size) {
         return meta::err(status_type::CONTENT_TOO_LARGE);
     }
 
-    return parse_state_body{ .content_length = content_length };
+    return deserialize_state_body{ .content_length = content_length };
 }
 
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_body state,
-    const parse_config& config,
+    deserialize_state_body state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     DEBUG_ASSERT(state.content_length > output.body.size());
@@ -484,25 +488,25 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
     output.body.insert(output.body.end(), limited_byte_buffer.begin(), limited_byte_buffer.end());
 
     if (output.body.size() < state.content_length) {
-        return parse_ok{ .state = state, .offset = limited_byte_buffer_size };
+        return deserialize_ok{ .state = state, .offset = limited_byte_buffer_size };
     }
 
     DEBUG_ASSERT(output.body.size() == state.content_length);
-    return parse_ok{ .state = parse_state_complete{}, .offset = limited_byte_buffer_size };
+    return deserialize_ok{ .state = deserialize_state_complete{}, .offset = limited_byte_buffer_size };
 }
 
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_chunked_body state,
-    const parse_config& config,
+    deserialize_state_chunked_body state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
-    return std::visit([&](const auto& a_state) { return parse_impl(output, a_state, config, input); }, state);
+    return std::visit([&](const auto& a_state) { return deserialize_impl(output, a_state, config, input); }, state);
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_chunked_body_empty state,
-    const parse_config& config,
+    deserialize_state_chunked_body_empty state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     const auto input_str = buffer_byte_to_str(input);
@@ -513,7 +517,7 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
             return meta::err(status_type::BAD_REQUEST);
         }
         DEBUG_ASSERT(chunk_line_err == find_err::NOT_FOUND);
-        return parse_ok::stop(parse_state_chunked_body{ state });
+        return deserialize_ok::stop(deserialize_state_chunked_body{ state });
     }
     const auto& chunk_line_ok = chunk_line_result.value();
 
@@ -542,8 +546,8 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
                                .value_or(std::string_view{});
 
     if (chunk_size == 0) { // last-chunk
-        return parse_ok{
-            .state = parse_state_chunked_body{ parse_state_chunked_body_complete{
+        return deserialize_ok{
+            .state = deserialize_state_chunked_body{ deserialize_state_chunked_body_complete{
                 .chunk_ext{ chunk_ext },
                 .chunk{},
             } },
@@ -551,24 +555,24 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
         };
     }
 
-    return parse_ok{
-        .state = parse_state_chunked_body{ parse_state_chunked_body_line{
+    return deserialize_ok{
+        .state = deserialize_state_chunked_body{ deserialize_state_chunked_body_line{
             .chunk_ext{ chunk_ext },
             .chunk_size = chunk_size,
         } },
         .offset = chunk_line_ok.offset,
     };
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_chunked_body_line state,
-    const parse_config& config,
+    deserialize_state_chunked_body_line state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     const std::uint32_t chunk_size = state.chunk_size;
     const std::size_t offset = chunk_size + tokens::CRLF.size();
     if (input.size() < offset) {
-        return parse_ok::stop(parse_state_chunked_body{ state });
+        return deserialize_ok::stop(deserialize_state_chunked_body{ state });
     }
 
     if (const std::string_view crlf_expected = buffer_byte_to_str(input.subspan(chunk_size, tokens::CRLF.size()));
@@ -576,48 +580,52 @@ meta::result<parse_ok, status_type> parse_machine::parse_impl(
         return meta::err(status_type::BAD_REQUEST);
     }
 
-    return parse_ok{
-        .state = parse_state_chunked_body{ parse_state_chunked_body_complete{
+    return deserialize_ok{
+        .state = deserialize_state_chunked_body{ deserialize_state_chunked_body_complete{
             .chunk_ext = std::move(state.chunk_ext),
             .chunk = input.subspan(0, chunk_size),
         } },
         .offset = offset,
     };
 }
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_chunked_body_complete state,
-    const parse_config& config,
+    deserialize_state_chunked_body_complete state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
     if (state.chunk.empty()) { // detected last-chunk
-        return parse_ok{
-            .state = parse_state_trailing_fields{},
-            .offset = parse_ok::continue_token,
+        return deserialize_ok{
+            .state = deserialize_state_trailing_fields{},
+            .offset = deserialize_ok::continue_token,
         };
     } else {
-        return parse_ok{
-            .state = parse_state_chunked_body{ parse_state_chunked_body_empty{} },
-            .offset = parse_ok::continue_token,
+        return deserialize_ok{
+            .state = deserialize_state_chunked_body{ deserialize_state_chunked_body_empty{} },
+            .offset = deserialize_ok::continue_token,
         };
     }
 }
 
-meta::result<parse_ok, status_type> parse_machine::parse_impl(
+meta::result<deserialize_ok, status_type> deserialize_machine::deserialize_impl(
     message_type& output,
-    parse_state_complete state,
-    const parse_config& config,
+    deserialize_state_complete state,
+    const deserialize_config& config,
     std::span<const std::byte> input
 ) {
-    return parse_ok{
+    return deserialize_ok{
         .state = std::visit(
             meta::overloaded{
-                [](const request_line_type&) { return parse_state_start_line{ parse_state_start_line_request{} }; },
-                [](const response_line_type&) { return parse_state_start_line{ parse_state_start_line_response{} }; },
+                [](const request_line_type&) {
+                    return deserialize_state_start_line{ deserialize_state_start_line_request{} };
+                },
+                [](const response_line_type&) {
+                    return deserialize_state_start_line{ deserialize_state_start_line_response{} };
+                },
             },
             output.start_line
         ),
-        .offset = parse_ok::continue_token,
+        .offset = deserialize_ok::continue_token,
     };
 }
 

@@ -10,22 +10,22 @@
 
 namespace sl::http::v1 {
 
-std::string to_str(const target_type& target) {
-    return std::visit([](const auto& t) { return detail::to_str_impl(t); }, target);
+std::string serialize(const target_type& target) {
+    return std::visit([](const auto& t) { return detail::serialize_impl(t); }, target);
 }
 
 namespace detail {
 
-std::string to_str_impl(const origin_target_type& target) {
+std::string serialize_impl(const origin_target_type& target) {
     std::string result;
     const std::size_t result_size = percent_encode::path_size(target.path) //
                                     + percent_encode::query_size(target.query);
     result.reserve(result_size);
-    percent_encode::path_to_str(result, target.path);
-    percent_encode::query_to_str(result, target.query);
+    percent_encode::serialize_path(result, target.path);
+    percent_encode::serialize_query(result, target.query);
     return result;
 }
-std::string to_str_impl(const absolute_target_type& target) {
+std::string serialize_impl(const absolute_target_type& target) {
     std::string result;
     constexpr std::string_view separator = "://";
     const std::size_t result_size = target.scheme.size() //
@@ -37,11 +37,11 @@ std::string to_str_impl(const absolute_target_type& target) {
     result += target.scheme;
     result += separator;
     result += target.authority;
-    percent_encode::path_to_str(result, target.path);
-    percent_encode::query_to_str(result, target.query);
+    percent_encode::serialize_path(result, target.path);
+    percent_encode::serialize_query(result, target.query);
     return result;
 }
-std::string to_str_impl(const authority_target_type& target) {
+std::string serialize_impl(const authority_target_type& target) {
     std::string result;
     const std::size_t result_size = target.host.size() //
                                     + 1 // ':'
@@ -52,7 +52,7 @@ std::string to_str_impl(const authority_target_type& target) {
     result += std::to_string(target.port);
     return result;
 }
-std::string to_str_impl(const asterisk_target_type&) { return "*"; }
+std::string serialize_impl(const asterisk_target_type&) { return "*"; }
 
 bool percent_encode::is_unreserved(char c) {
     constexpr std::array allowed{ '-', '.', '_', '~' };
@@ -93,7 +93,7 @@ void percent_encode::append(std::string& result, char c) {
     result += hex_chars[static_cast<std::uint8_t>(c) & 0x0F];
 }
 
-void percent_encode::path_to_str(std::string& result, std::string_view path) {
+void percent_encode::serialize_path(std::string& result, std::string_view path) {
     for (char c : path) {
         if (is_path_safe(c)) {
             result += c;
@@ -103,17 +103,17 @@ void percent_encode::path_to_str(std::string& result, std::string_view path) {
     }
 }
 
-void percent_encode::query_to_str(std::string& result, const query_params& query) {
+void percent_encode::serialize_query(std::string& result, const query_params& query) {
     bool first = true;
     for (const auto& [key, value] : query) {
         const char c = std::exchange(first, false) ? '?' : '&';
-        query_to_str(result, key);
+        serialize_query(result, key);
         result += '=';
-        query_to_str(result, value);
+        serialize_query(result, value);
     }
 }
 
-void percent_encode::query_to_str(std::string& result, std::string_view query_str) {
+void percent_encode::serialize_query(std::string& result, std::string_view query_str) {
     for (char c : query_str) {
         if (is_unreserved(c)) {
             result += c;

@@ -23,7 +23,7 @@ struct message_chunk {
     std::span<const std::byte> chunk;
 };
 
-struct parse_config {
+struct deserialize_config {
     meta::unique_function<void(message_chunk)> chunk_cb;
     meta::unique_function<void(message_type)> message_cb;
 
@@ -36,82 +36,83 @@ struct parse_config {
 };
 
 meta::unique_function<meta::maybe<status_type>(std::span<const std::byte> input)>
-    make_parse_request(parse_config config);
+    make_deserialize_request(deserialize_config config);
 
 meta::unique_function<meta::maybe<status_type>(std::span<const std::byte> input)>
-    make_parse_response(parse_config config);
+    make_deserialize_response(deserialize_config config);
 
 namespace detail {
 
-struct parse_state_start_line_request_method {};
-struct parse_state_start_line_request_target {};
-struct parse_state_start_line_request_version {};
-using parse_state_start_line_request = std::variant< //
-    parse_state_start_line_request_method,
-    parse_state_start_line_request_target,
-    parse_state_start_line_request_version>;
+struct deserialize_state_start_line_request_method {};
+struct deserialize_state_start_line_request_target {};
+struct deserialize_state_start_line_request_version {};
+using deserialize_state_start_line_request = std::variant< //
+    deserialize_state_start_line_request_method,
+    deserialize_state_start_line_request_target,
+    deserialize_state_start_line_request_version>;
 
-struct parse_state_start_line_response_version {};
-struct parse_state_start_line_response_status {};
-struct parse_state_start_line_response_reason {};
-using parse_state_start_line_response = std::variant< //
-    parse_state_start_line_response_version,
-    parse_state_start_line_response_status,
-    parse_state_start_line_response_reason>;
+struct deserialize_state_start_line_response_version {};
+struct deserialize_state_start_line_response_status {};
+struct deserialize_state_start_line_response_reason {};
+using deserialize_state_start_line_response = std::variant< //
+    deserialize_state_start_line_response_version,
+    deserialize_state_start_line_response_status,
+    deserialize_state_start_line_response_reason>;
 
-using parse_state_start_line = std::variant<parse_state_start_line_request, parse_state_start_line_response>;
+using deserialize_state_start_line =
+    std::variant<deserialize_state_start_line_request, deserialize_state_start_line_response>;
 
-struct parse_state_fields {
+struct deserialize_state_fields {
     std::size_t consumed_bytes = 0;
 };
-struct parse_state_body {
+struct deserialize_state_body {
     std::size_t content_length = 0;
 };
 
-struct parse_state_chunked_body_empty {};
-struct parse_state_chunked_body_line {
+struct deserialize_state_chunked_body_empty {};
+struct deserialize_state_chunked_body_line {
     std::string chunk_ext;
     std::uint32_t chunk_size = 0;
 };
-struct parse_state_chunked_body_complete {
+struct deserialize_state_chunked_body_complete {
     std::string chunk_ext;
     std::span<const std::byte> chunk;
 };
-using parse_state_chunked_body = std::variant< //
-    parse_state_chunked_body_empty,
-    parse_state_chunked_body_line,
-    parse_state_chunked_body_complete>;
+using deserialize_state_chunked_body = std::variant< //
+    deserialize_state_chunked_body_empty,
+    deserialize_state_chunked_body_line,
+    deserialize_state_chunked_body_complete>;
 
-struct parse_state_trailing_fields {
+struct deserialize_state_trailing_fields {
     std::size_t consumed_bytes = 0;
 };
-struct parse_state_complete {};
+struct deserialize_state_complete {};
 
-using parse_state = std::variant< //
-    parse_state_start_line,
-    parse_state_fields,
-    parse_state_body,
-    parse_state_chunked_body,
-    parse_state_trailing_fields,
-    parse_state_complete>;
+using deserialize_state = std::variant< //
+    deserialize_state_start_line,
+    deserialize_state_fields,
+    deserialize_state_body,
+    deserialize_state_chunked_body,
+    deserialize_state_trailing_fields,
+    deserialize_state_complete>;
 
-struct parse_ok {
+struct deserialize_ok {
     // continue is offset > 0 or offset == continue_token
     static constexpr std::size_t continue_token = std::numeric_limits<std::size_t>::max();
-    static parse_ok stop(parse_state state) {
-        return parse_ok{
+    static deserialize_ok stop(deserialize_state state) {
+        return deserialize_ok{
             .state = std::move(state),
             .offset = 0,
         };
     }
 
 public:
-    parse_state state;
+    deserialize_state state;
     std::size_t offset;
 };
 
-struct parse_machine {
-    constexpr parse_machine(parse_config config, bool is_request) : config_{ std::move(config) } {
+struct deserialize_machine {
+    constexpr deserialize_machine(deserialize_config config, bool is_request) : config_{ std::move(config) } {
         DEBUG_ASSERT(!!config_.message_cb);
         if (is_request) {
             output_.start_line = request_line_type{};
@@ -120,134 +121,134 @@ struct parse_machine {
         }
     }
 
-    meta::maybe<status_type> parse(std::span<const std::byte> input) &;
+    meta::maybe<status_type> deserialize(std::span<const std::byte> input) &;
 
 private: // only dispatch and mutation
-    meta::result<std::size_t, status_type> parse_impl(std::span<const std::byte> input) &;
+    meta::result<std::size_t, status_type> deserialize_impl(std::span<const std::byte> input) &;
 
 public: // transparent
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_start_line state,
-        const parse_config& config,
+        deserialize_state_start_line state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
 
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_start_line_request state,
-        const parse_config& config,
+        deserialize_state_start_line_request state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_start_line_request_method state,
-        const parse_config& config,
+        deserialize_state_start_line_request_method state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_start_line_request_target state,
-        const parse_config& config,
+        deserialize_state_start_line_request_target state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_start_line_request_version state,
-        const parse_config& config,
-        std::span<const std::byte> input
-    );
-
-    static meta::result<parse_ok, status_type> parse_impl(
-        message_type& output,
-        parse_state_start_line_response state,
-        const parse_config& config,
-        std::span<const std::byte> input
-    );
-    static meta::result<parse_ok, status_type> parse_impl(
-        message_type& output,
-        parse_state_start_line_response_version state,
-        const parse_config& config,
-        std::span<const std::byte> input
-    );
-    static meta::result<parse_ok, status_type> parse_impl(
-        message_type& output,
-        parse_state_start_line_response_status state,
-        const parse_config& config,
-        std::span<const std::byte> input
-    );
-    static meta::result<parse_ok, status_type> parse_impl(
-        message_type& output,
-        parse_state_start_line_response_reason state,
-        const parse_config& config,
+        deserialize_state_start_line_request_version state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
 
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_fields state,
-        const parse_config& config,
+        deserialize_state_start_line_response state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_trailing_fields state,
-        const parse_config& config,
+        deserialize_state_start_line_response_version state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        std::variant<parse_state_fields, parse_state_trailing_fields> state,
-        const parse_config& config,
+        deserialize_state_start_line_response_status state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
-    static meta::result<parse_state, status_type>
-        parse_state_fields_finalize(message_type& output, const parse_config& config);
-
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_body state,
-        const parse_config& config,
+        deserialize_state_start_line_response_reason state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
 
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_chunked_body state,
-        const parse_config& config,
+        deserialize_state_fields state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_chunked_body_empty state,
-        const parse_config& config,
+        deserialize_state_trailing_fields state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_chunked_body_line state,
-        const parse_config& config,
+        std::variant<deserialize_state_fields, deserialize_state_trailing_fields> state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_state, status_type>
+        deserialize_state_fields_finalize(message_type& output, const deserialize_config& config);
+
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_chunked_body_complete state,
-        const parse_config& config,
+        deserialize_state_body state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
 
-    static meta::result<parse_ok, status_type> parse_impl(
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
         message_type& output,
-        parse_state_complete state,
-        const parse_config& config,
+        deserialize_state_chunked_body state,
+        const deserialize_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
+        message_type& output,
+        deserialize_state_chunked_body_empty state,
+        const deserialize_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
+        message_type& output,
+        deserialize_state_chunked_body_line state,
+        const deserialize_config& config,
+        std::span<const std::byte> input
+    );
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
+        message_type& output,
+        deserialize_state_chunked_body_complete state,
+        const deserialize_config& config,
+        std::span<const std::byte> input
+    );
+
+    static meta::result<deserialize_ok, status_type> deserialize_impl(
+        message_type& output,
+        deserialize_state_complete state,
+        const deserialize_config& config,
         std::span<const std::byte> input
     );
 
 private:
     message_type output_{};
     remainder_buffer<> remainder_{}; // TODO: extract outside
-    parse_state state_;
-    parse_config config_;
+    deserialize_state state_;
+    deserialize_config config_;
 };
 
 } // namespace detail

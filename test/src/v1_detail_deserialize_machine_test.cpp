@@ -12,7 +12,7 @@
 #include <cstring>
 #include <random>
 
-namespace sl::http::v1::deserialize::detail {
+namespace sl::http::v1::detail {
 
 inline bool span_eq(std::span<const std::byte> a, std::span<const std::byte> b) {
     if (a.size() != b.size()) {
@@ -81,7 +81,7 @@ TEST_F(RemainderBuffer, ctr) {
 }
 
 TEST_F(RemainderBuffer, merge) {
-    remainder_buffer rb{ allocator };
+    remainder_buffer rb{ 0, allocator };
 
     const auto input = MakeInput<1024>();
     const auto prev_offset = rb.merge(input);
@@ -100,7 +100,7 @@ TEST_F(RemainderBuffer, addOffset) {
 }
 
 TEST_F(RemainderBuffer, mergeAddOffset) {
-    remainder_buffer rb{ allocator };
+    remainder_buffer rb{ 0, allocator };
 
     const auto input = MakeInput<1024>();
     std::ignore = rb.merge(input);
@@ -120,7 +120,7 @@ TEST_F(RemainderBuffer, mergeAddOffset) {
 }
 
 TEST_F(RemainderBuffer, mergeAddOffsetMerge) {
-    remainder_buffer rb{ allocator };
+    remainder_buffer rb{ 0, allocator };
 
     const auto input = MakeInput<2048>();
     const auto input_first = std::span(input).subspan(0, 1024);
@@ -139,7 +139,7 @@ TEST_F(RemainderBuffer, mergeAddOffsetMerge) {
 
 // Verify: fully consumed buffer doesn't accumulate on subsequent merges
 TEST_F(RemainderBuffer, mergeFullyConsumedNoGrowth) {
-    remainder_buffer rb{ allocator };
+    remainder_buffer rb{ 0, allocator };
 
     for (int i = 0; i < 100; ++i) {
         const auto input = MakeInput<256>();
@@ -156,7 +156,7 @@ TEST_F(RemainderBuffer, mergeFullyConsumedNoGrowth) {
 
 // Verify: unconsumed data accumulates (documents unbounded growth potential)
 TEST_F(RemainderBuffer, mergeUnconsumedGrows) {
-    remainder_buffer rb{ allocator };
+    remainder_buffer rb{ 0, allocator };
 
     const auto chunk1 = MakeInput<256>();
     const auto chunk2 = MakeInput<256>();
@@ -180,7 +180,7 @@ TEST_F(RemainderBuffer, mergeUnconsumedGrows) {
 
 // Verify: partial consumption + merge keeps unconsumed prefix
 TEST_F(RemainderBuffer, mergePartialConsumeKeepsRemainder) {
-    remainder_buffer rb{ allocator };
+    remainder_buffer rb{ 0, allocator };
 
     const auto chunk1 = MakeInput<256>();
     const auto chunk2 = MakeInput<256>();
@@ -200,7 +200,7 @@ TEST_F(RemainderBuffer, mergePartialConsumeKeepsRemainder) {
 
 // Verify: repeated partial consumption pattern (simulates slow parsing)
 TEST_F(RemainderBuffer, repeatedPartialConsumption) {
-    remainder_buffer rb{ allocator };
+    remainder_buffer rb{ 0, allocator };
 
     // Simulate: receive 100 bytes, parse 50, receive 100, parse 50, ...
     std::size_t total_received = 0;
@@ -221,4 +221,4 @@ TEST_F(RemainderBuffer, repeatedPartialConsumption) {
     EXPECT_EQ(rb.view().size(), 500);
 }
 
-} // namespace sl::http::v1::deserialize::detail
+} // namespace sl::http::v1::detail
