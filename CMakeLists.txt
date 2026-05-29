@@ -23,11 +23,11 @@ project(
         LANGUAGES C CXX)
 
 add_library(${PROJECT_NAME} STATIC
-    src/v1/detail/percent_encoding.cpp
     src/v1/detail/strings.cpp
     src/v1/deserialize/message.cpp
     src/v1/deserialize/target.cpp
     src/v1/serialize/message.cpp
+    src/v1/serialize/target.cpp
 )
 add_library(sl::http ALIAS ${PROJECT_NAME})
 

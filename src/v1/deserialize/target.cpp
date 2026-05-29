@@ -3,14 +3,13 @@
 //
 
 #include "sl/http/v1/deserialize/target.hpp"
-#include "sl/http/v1/detail/percent_encoding.hpp"
 #include "sl/http/v1/detail/strings.hpp"
 
 #include <charconv>
 
 namespace sl::http::v1 {
 
-meta::maybe<target_type> parse_target(std::string_view target_str) {
+meta::maybe<target_type> deserialize_target(std::string_view target_str) {
     if (target_str.empty()) {
         return meta::null;
     }
@@ -22,17 +21,23 @@ meta::maybe<target_type> parse_target(std::string_view target_str) {
 
     // origin-form: starts with "/"
     if (target_str.starts_with('/')) {
-        return detail::parse_origin_form(target_str).map([](auto&& form) -> target_type { return std::move(form); });
+        return detail::deserialize_origin_form(target_str).map([](auto&& form) -> target_type {
+            return std::move(form);
+        });
     }
 
     // absolute-form: starts with scheme
     if (target_str.starts_with("http://") || target_str.starts_with("https://")) {
-        return detail::parse_absolute_form(target_str).map([](auto&& form) -> target_type { return std::move(form); });
+        return detail::deserialize_absolute_form(target_str).map([](auto&& form) -> target_type {
+            return std::move(form);
+        });
     }
 
     // authority-form: host:port (contains ':' but no '/')
     if (target_str.find(':') != std::string_view::npos && target_str.find('/') == std::string_view::npos) {
-        return detail::parse_authority_form(target_str).map([](auto&& form) -> target_type { return std::move(form); });
+        return detail::deserialize_authority_form(target_str).map([](auto&& form) -> target_type {
+            return std::move(form);
+        });
     }
 
     return meta::null;
@@ -40,7 +45,7 @@ meta::maybe<target_type> parse_target(std::string_view target_str) {
 
 namespace detail {
 
-meta::maybe<origin_target_type> parse_origin_form(std::string_view target_str) {
+meta::maybe<origin_target_type> deserialize_origin_form(std::string_view target_str) {
     // must start with '/'
     if (!target_str.starts_with('/')) {
         return meta::null;
@@ -53,15 +58,15 @@ meta::maybe<origin_target_type> parse_origin_form(std::string_view target_str) {
     std::string_view raw_query = split.tail.value_or(std::string_view{});
 
     // decode path
-    auto maybe_path = percent_decode(raw_path);
+    auto maybe_path = percent_decode::str(raw_path);
     if (!maybe_path.has_value()) {
         return meta::null;
     }
 
-    // parse query if present
+    // deserialize query if present
     query_params query;
     if (!raw_query.empty()) {
-        auto maybe_query = parse_query_string(raw_query);
+        auto maybe_query = deserialize_query_string(raw_query);
         if (!maybe_query.has_value()) {
             return meta::null;
         }
@@ -74,7 +79,7 @@ meta::maybe<origin_target_type> parse_origin_form(std::string_view target_str) {
     };
 }
 
-meta::maybe<absolute_target_type> parse_absolute_form(std::string_view target_str) {
+meta::maybe<absolute_target_type> deserialize_absolute_form(std::string_view target_str) {
     // extract scheme
     std::string scheme;
     if (target_str.starts_with("https://")) {
@@ -106,14 +111,14 @@ meta::maybe<absolute_target_type> parse_absolute_form(std::string_view target_st
         raw_query = query_split.tail.value_or(std::string_view{});
     }
 
-    auto maybe_path = percent_decode(raw_path);
+    auto maybe_path = percent_decode::str(raw_path);
     if (!maybe_path.has_value()) {
         return meta::null;
     }
 
     query_params query;
     if (!raw_query.empty()) {
-        auto maybe_query = parse_query_string(raw_query);
+        auto maybe_query = deserialize_query_string(raw_query);
         if (!maybe_query.has_value()) {
             return meta::null;
         }
@@ -128,7 +133,7 @@ meta::maybe<absolute_target_type> parse_absolute_form(std::string_view target_st
     };
 }
 
-meta::maybe<authority_target_type> parse_authority_form(std::string_view target_str) {
+meta::maybe<authority_target_type> deserialize_authority_form(std::string_view target_str) {
     // find last ':' for host:port split
     auto pos = target_str.rfind(':');
     if (pos == std::string_view::npos) {
@@ -160,7 +165,7 @@ meta::maybe<authority_target_type> parse_authority_form(std::string_view target_
     };
 }
 
-meta::maybe<query_params> parse_query_string(std::string_view query_str) {
+meta::maybe<query_params> deserialize_query_string(std::string_view query_str) {
     query_params result;
 
     while (!query_str.empty()) {
@@ -172,14 +177,14 @@ meta::maybe<query_params> parse_query_string(std::string_view query_str) {
             // split by '=' for key-value
             auto kv_split = try_find_split_unlimited(pair_str, "=");
 
-            auto maybe_key = percent_decode_query(kv_split.head);
+            auto maybe_key = percent_decode::query(kv_split.head);
             if (!maybe_key.has_value()) {
                 return meta::null;
             }
 
             std::string value;
             if (kv_split.tail.has_value()) {
-                auto maybe_value = percent_decode_query(kv_split.tail.value());
+                auto maybe_value = percent_decode::query(kv_split.tail.value());
                 if (!maybe_value.has_value()) {
                     return meta::null;
                 }
@@ -196,6 +201,72 @@ meta::maybe<query_params> parse_query_string(std::string_view query_str) {
     }
 
     return result;
+}
+
+meta::maybe<std::string> percent_decode::query(std::string_view encoded) {
+    std::string result;
+    result.reserve(encoded.size());
+
+    for (std::size_t i = 0; i < encoded.size(); ++i) {
+        if (encoded[i] == '%') {
+            if (i + 2 >= encoded.size()) {
+                return meta::null;
+            }
+            auto maybe_char = byte(encoded[i + 1], encoded[i + 2]);
+            if (!maybe_char.has_value()) {
+                return meta::null;
+            }
+            result += maybe_char.value();
+            i += 2;
+        } else if (encoded[i] == '+') {
+            result += ' ';
+        } else {
+            result += encoded[i];
+        }
+    }
+
+    return result;
+}
+
+meta::maybe<std::string> percent_decode::str(std::string_view encoded) {
+    std::string result;
+    result.reserve(encoded.size());
+
+    for (std::size_t i = 0; i < encoded.size(); ++i) {
+        if (encoded[i] == '%') {
+            if (i + 2 >= encoded.size()) {
+                return meta::null; // incomplete percent encoding
+            }
+            auto maybe_char = byte(encoded[i + 1], encoded[i + 2]);
+            if (!maybe_char.has_value()) {
+                return meta::null;
+            }
+            result += maybe_char.value();
+            i += 2;
+        } else {
+            result += encoded[i];
+        }
+    }
+
+    return result;
+}
+
+meta::maybe<char> percent_decode::byte(char high, char low) {
+    auto hex_to_val = [](char c) -> meta::maybe<int> {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        return meta::null;
+    };
+
+    auto high_val = hex_to_val(high);
+    auto low_val = hex_to_val(low);
+
+    if (!high_val.has_value() || !low_val.has_value()) {
+        return meta::null;
+    }
+
+    return static_cast<char>((high_val.value() << 4) | low_val.value());
 }
 
 } // namespace detail

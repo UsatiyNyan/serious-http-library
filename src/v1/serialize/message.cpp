@@ -10,28 +10,36 @@
 #include <variant>
 
 namespace sl::http::v1 {
+
+meta::unique_function<std::span<const std::byte>(std::size_t written)>
+    make_serialize(const message_type& message, serialize_config config) {
+    return [machine = detail::serialize_machine{ message, config }](std::size_t written) mutable {
+        return machine.resume(written);
+    };
+}
+
 namespace detail {
 
-std::span<const std::byte> write_machine::resume(std::size_t written) & {
+std::span<const std::byte> serialize_machine::resume(std::size_t written) & {
     if (!remainder_.view().empty()) {
         remainder_.add_offset(written);
         return remainder_.view();
     }
 
-    if (std::holds_alternative<write_state_complete>(state_)) {
+    if (std::holds_alternative<serialize_state_complete>(state_)) {
         return {};
     }
 
-    if (auto* state = std::get_if<write_state_body>(&state_)) {
+    if (auto* state = std::get_if<serialize_state_body>(&state_)) {
         state->offset += written;
         return std::span{ message_.body }.subspan(state->offset);
     }
 
     while (remainder_.view().size_bytes() < config_.buffer_size //
-           && !std::holds_alternative<write_state_complete>(state_)) {
+           && !std::holds_alternative<serialize_state_complete>(state_)) {
         state_ = std::visit(
             meta::overloaded{
-                [](const write_state_complete& state) { return write_state{ state }; },
+                [](const serialize_state_complete& state) { return serialize_state{ state }; },
                 [this](const auto& state) { return resume_impl(message_, remainder_, config_, state); },
             },
             state_
@@ -41,18 +49,18 @@ std::span<const std::byte> write_machine::resume(std::size_t written) & {
     return remainder_.view();
 }
 
-write_state write_machine::resume_impl(
+serialize_state serialize_machine::resume_impl(
     const message_type& message,
     remainder_buffer<>& remainder,
-    const write_config& config,
-    const write_state_start_line& state
+    const serialize_config& config,
+    const serialize_state_start_line& state
 ) {
     const auto write = [&remainder](std::string_view str) { std::ignore = remainder.merge(buffer_str_to_byte(str)); };
 
     std::visit(
         meta::overloaded{
             [&](const request_line_type& req) {
-                const auto target = to_str(req.target);
+                const auto target = serialize(req.target);
                 write(enum_to_str(req.method));
                 write(tokens::SP);
                 write(target);
@@ -73,20 +81,20 @@ write_state write_machine::resume_impl(
     );
     write(tokens::CRLF);
 
-    return write_state_fields{ .it = message.fields.begin() };
+    return serialize_state_fields{ .it = message.fields.begin() };
 }
 
-write_state write_machine::resume_impl(
+serialize_state serialize_machine::resume_impl(
     const message_type& message,
     remainder_buffer<>& remainder,
-    const write_config& config,
-    const write_state_fields& state
+    const serialize_config& config,
+    const serialize_state_fields& state
 ) {
     const auto write = [&remainder](std::string_view str) { std::ignore = remainder.merge(buffer_str_to_byte(str)); };
 
     if (state.it == message.fields.end()) {
         write(tokens::CRLF);
-        return write_state_body{ .offset = 0 };
+        return serialize_state_body{ .offset = 0 };
     }
 
     write(state.it.key());
@@ -94,23 +102,23 @@ write_state write_machine::resume_impl(
     write(state.it.value());
     write(tokens::CRLF);
 
-    return write_state_fields{ .it = std::next(state.it) };
+    return serialize_state_fields{ .it = std::next(state.it) };
 }
 
-write_state write_machine::resume_impl(
+serialize_state serialize_machine::resume_impl(
     const message_type& message,
     remainder_buffer<>& remainder,
-    const write_config& config,
-    const write_state_body& state
+    const serialize_config& config,
+    const serialize_state_body& state
 ) {
     if (state.offset == message.body.size()) {
-        return write_state_complete{};
+        return serialize_state_complete{};
     }
 
     DEBUG_ASSERT(remainder.view().size_bytes() < config.buffer_size);
     const std::size_t offset = std::min(config.buffer_size - remainder.view().size_bytes(), message.body.size());
     std::ignore = remainder.merge(std::span{ message.body }.subspan(0, offset));
-    return write_state_body{ .offset = offset };
+    return serialize_state_body{ .offset = offset };
 }
 
 std::error_code verify(const message_type& message) {
