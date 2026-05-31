@@ -62,6 +62,8 @@ http::v1::message_type handle(const http::v1::message_type& request, bool is_log
     };
 }
 
+static constexpr std::size_t BUFFER_SIZE = 1024;
+
 exec::async<void> client_coro(
     std::pair<io::sys::socket, io::sys::address> accepted,
     io::sys::epoll& epoll,
@@ -81,7 +83,7 @@ exec::async<void> client_coro(
             }
         );
 
-        std::array<std::byte, 1024> read_buffer{};
+        std::array<std::byte, BUFFER_SIZE> read_buffer{};
         while (!maybe_request.has_value()) {
             co_await exec::start_on(executor);
             const auto io_result = co_await socket_async->read(read_buffer);
@@ -106,7 +108,7 @@ exec::async<void> client_coro(
         auto serialize = http::v1::make_serialize(
             response,
             http::v1::serialize_config{
-                .buffer_size = 1024,
+                .buffer_size = BUFFER_SIZE,
             }
         );
 

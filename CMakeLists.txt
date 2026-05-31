@@ -17,7 +17,7 @@ sl_project_prologue(
 
 project(
         serious-http-library
-        VERSION 0.0.0
+        VERSION 1.0.0
         DESCRIPTION "TODO"
         HOMEPAGE_URL "TODO"
         LANGUAGES C CXX)
