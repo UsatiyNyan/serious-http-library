@@ -67,7 +67,7 @@ static constexpr std::size_t BUFFER_SIZE = 1024;
 exec::async<void> client_coro(
     std::pair<io::sys::socket, io::sys::address> accepted,
     io::sys::epoll& epoll,
-    exec::serial_executor<>& executor,
+    exec::serial_executor<>& executor [[maybe_unused]],
     bool is_logging
 ) {
     auto& [socket, address] = accepted;
@@ -85,9 +85,7 @@ exec::async<void> client_coro(
 
         std::array<std::byte, BUFFER_SIZE> read_buffer{};
         while (!maybe_request.has_value()) {
-            co_await exec::start_on(executor);
             const auto io_result = co_await socket_async->read(read_buffer);
-            co_await exec::start_on(executor.get_inner());
             if (!io_result.has_value()) {
                 if (io_result.error() == std::errc::connection_reset) {
                     co_return;
@@ -118,9 +116,7 @@ exec::async<void> client_coro(
             if (write_buffer.empty()) {
                 break;
             }
-            co_await exec::start_on(executor);
             const auto io_result = co_await socket_async->write(write_buffer);
-            co_await exec::start_on(executor.get_inner());
             if (!io_result.has_value()) {
                 if (io_result.error() == std::errc::connection_reset || io_result.error() == std::errc::broken_pipe) {
                     co_return;
@@ -138,12 +134,8 @@ exec::async<void> serve_coro(
     exec::serial_executor<>& executor,
     bool is_logging
 ) {
-    using exec::operator co_await;
-
     while (true) {
-        co_await exec::start_on(executor);
         auto accept_result = co_await server_async->accept();
-        co_await exec::start_on(executor.get_inner());
         exec::coro_schedule(
             executor.get_inner(), client_coro(std::move(accept_result).value(), epoll, executor, is_logging)
         );
@@ -161,9 +153,9 @@ void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount, b
     auto server_async = *ASSERT_VAL(io::async::server::create(server, epoll));
 
     std::unique_ptr<exec::executor> executor_holder;
+    const auto executor_config = exec::thread_pool_config::with_hw_limit(tcount);
     if (tcount > 0) {
-        executor_holder =
-            std::make_unique<exec::monolithic_thread_pool<>>(exec::thread_pool_config::with_hw_limit(tcount));
+        executor_holder = std::make_unique<exec::monolithic_thread_pool<>>(executor_config);
     }
     exec::serial_executor<> executor{ executor_holder ? *executor_holder : exec::inline_executor() };
 
@@ -176,11 +168,21 @@ void main(std::uint16_t port, std::uint16_t max_clients, std::uint32_t tcount, b
             break;
         }
         const std::uint32_t nevents = wait_result.value();
+        const std::uint32_t batch_count = std::max(executor_config.tcount, 1u);
+        const std::uint32_t batch_size = nevents / batch_count;
 
-        exec::schedule(executor, [events, nevents]() mutable {
-            io::sys::epoll::fulfill(std::span{ events }.subspan(0, nevents));
-            return meta::ok(meta::unit{});
-        }) | exec::detach();
+        for (std::uint32_t batch_index = 0; batch_index < batch_count; ++batch_index) {
+            const std::uint32_t begin = batch_size * batch_index;
+            const std::uint32_t begin_next = batch_index + 1;
+            const std::uint32_t end = begin_next == batch_count ? nevents : batch_size * begin_next;
+            const auto batch_view = std::span{ events }.subspan(begin, end - begin);
+            exec::schedule(
+                executor, [batch = std::vector<::epoll_event>{ batch_view.begin(), batch_view.end() }]() mutable {
+                    io::sys::epoll::fulfill(batch);
+                    return meta::ok(meta::unit{});
+                }
+            ) | exec::detach();
+        }
     }
 }
 
