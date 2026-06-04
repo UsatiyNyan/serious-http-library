@@ -17,4 +17,5 @@ sl_target_link_system_libraries(${PROJECT_NAME}
 )
 
 sl_add_example(${PROJECT_NAME} 00_http_v1_server)
+sl_add_example(${PROJECT_NAME} 01_http_v1_server_parallel)
 # sl_add_example(${PROJECT_NAME} 01_http_client)
